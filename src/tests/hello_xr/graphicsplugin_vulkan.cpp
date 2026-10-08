@@ -32,6 +32,98 @@
 
 namespace {
 
+constexpr uint32_t NativeLfAtlasWidth = 1920;
+constexpr uint32_t NativeLfAtlasHeight = 1080;
+constexpr uint32_t NativeLfViewWidth = 874;
+constexpr uint32_t NativeLfViewHeight = 500;
+constexpr std::array<VkOffset2D, 4> NativeLfViewOrigins = {
+    VkOffset2D{0, 0}, VkOffset2D{1046, 0}, VkOffset2D{0, 580}, VkOffset2D{1046, 580}};
+constexpr std::array<std::array<float, 4>, 8> NativeLfViewColors = {
+    std::array<float, 4>{1.0f, 0.0f, 0.0f, 1.0f}, std::array<float, 4>{0.0f, 1.0f, 0.0f, 1.0f},
+    std::array<float, 4>{0.0f, 0.0f, 1.0f, 1.0f}, std::array<float, 4>{1.0f, 1.0f, 0.0f, 1.0f},
+    std::array<float, 4>{1.0f, 0.0f, 1.0f, 1.0f}, std::array<float, 4>{0.0f, 1.0f, 1.0f, 1.0f},
+    std::array<float, 4>{1.0f, 0.5f, 0.0f, 1.0f}, std::array<float, 4>{0.5f, 0.0f, 1.0f, 1.0f}};
+
+void ClearNativeLfRect(VkCommandBuffer commandBuffer, VkRect2D rect, const std::array<float, 4>& color) {
+    VkClearAttachment attachment{};
+    attachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    attachment.colorAttachment = 0;
+    std::copy(color.begin(), color.end(), attachment.clearValue.color.float32);
+    const VkClearRect clearRect{rect, 0, 1};
+    vkCmdClearAttachments(commandBuffer, 1, &attachment, 1, &clearRect);
+}
+
+VkRect2D NativeLfLocalRect(uint32_t viewIndex, int32_t x, int32_t y, uint32_t width, uint32_t height) {
+    const VkOffset2D origin = NativeLfViewOrigins.at(viewIndex);
+    return {{origin.x + x, origin.y + y}, {width, height}};
+}
+
+void ClearNativeLfView(VkCommandBuffer commandBuffer, uint32_t eyeIndex, uint32_t viewIndex) {
+    const uint32_t sourceIndex = eyeIndex * 4 + viewIndex;
+    const std::array<float, 4>& background = NativeLfViewColors.at(sourceIndex);
+    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 0, 0, NativeLfViewWidth, NativeLfViewHeight), background);
+}
+
+void RecordNativeLfPattern(VkCommandBuffer commandBuffer, uint32_t eyeIndex, uint32_t viewIndex) {
+    const uint32_t sourceIndex = eyeIndex * 4 + viewIndex;
+    const std::array<float, 4> white = {1.0f, 1.0f, 1.0f, 1.0f};
+    const std::array<float, 4> black = {0.0f, 0.0f, 0.0f, 1.0f};
+
+    // Independent stepped x/y gradients make transposition and mirroring visible without adding a diagnostic shader.
+    constexpr uint32_t GradientSteps = 16;
+    for (uint32_t step = 0; step < GradientSteps; ++step) {
+        const float value = static_cast<float>(step) / static_cast<float>(GradientSteps - 1);
+        const std::array<float, 4> gradient = {value, value, value, 1.0f};
+        const int32_t x = static_cast<int32_t>((NativeLfViewWidth - 32) * step / GradientSteps);
+        const int32_t y = static_cast<int32_t>((NativeLfViewHeight - 32) * step / GradientSteps);
+        const uint32_t nextX = (NativeLfViewWidth - 32) * (step + 1) / GradientSteps;
+        const uint32_t nextY = (NativeLfViewHeight - 32) * (step + 1) / GradientSteps;
+        ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, x, NativeLfViewHeight - 24, nextX - x, 23), gradient);
+        ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, NativeLfViewWidth - 24, y, 23, nextY - y), gradient);
+    }
+
+    // A unique direction arrow per atlas slot: up, right, down and left.
+    switch (viewIndex) {
+        case 0:
+            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 434, 205, 6, 80), black);
+            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 420, 205, 34, 8), black);
+            break;
+        case 1:
+            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 397, 247, 80, 6), black);
+            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 469, 233, 8, 34), black);
+            break;
+        case 2:
+            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 434, 215, 6, 80), black);
+            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 420, 287, 34, 8), black);
+            break;
+        case 3:
+            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 397, 247, 80, 6), black);
+            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 397, 233, 8, 34), black);
+            break;
+    }
+
+    // The off-axis marker and binary source index distinguish every eye/view and expose accidental flips.
+    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 29, 41, 7, 12), white);
+    for (uint32_t bit = 0; bit < 3; ++bit) {
+        if ((sourceIndex & (1u << bit)) != 0) {
+            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 48 + static_cast<int32_t>(bit) * 10, 41, 7, 12), black);
+        }
+    }
+
+    // Draw the one-pixel border last so every source footprint has an exact visible edge.
+    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 0, 0, NativeLfViewWidth, 1), white);
+    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 0, NativeLfViewHeight - 1, NativeLfViewWidth, 1), white);
+    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 0, 0, 1, NativeLfViewHeight), white);
+    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, NativeLfViewWidth - 1, 0, 1, NativeLfViewHeight), white);
+}
+
+XrFovf NativeLfSubviewFov() {
+    constexpr float Pi = 3.14159265358979323846f;
+    const float vertical = 7.5f * Pi / 180.0f;
+    const float horizontal = std::atan(std::tan(vertical) * (16.0f / 9.0f));
+    return {-horizontal, horizontal, vertical, -vertical};
+}
+
 static std::string vkResultString(VkResult res) {
     switch (res) {
         case VK_SUCCESS:
@@ -993,15 +1085,20 @@ struct SwapchainImageContext {
     RenderPass rp{};
     Pipeline pipe{};
     XrStructureType swapchainImageType;
+    bool nativeLfDiagnostic{false};
+    uint32_t diagnosticEyeIndex{0};
 
     SwapchainImageContext() = default;
 
     std::vector<XrSwapchainImageBaseHeader*> Create(const VulkanDebugObjectNamer& namer, VkDevice device,
                                                     MemoryAllocator* memAllocator, uint32_t capacity,
                                                     const XrSwapchainCreateInfo& swapchainCreateInfo, const PipelineLayout& layout,
-                                                    const ShaderProgram& sp, const VertexBuffer<Geometry::Vertex>& vb) {
+                                                    const ShaderProgram& sp, const VertexBuffer<Geometry::Vertex>& vb,
+                                                    bool nativeLf, uint32_t eyeIndex) {
         m_vkDevice = device;
         m_namer = namer;
+        nativeLfDiagnostic = nativeLf;
+        diagnosticEyeIndex = eyeIndex;
 
         size = {swapchainCreateInfo.width, swapchainCreateInfo.height};
         VkFormat colorFormat = (VkFormat)swapchainCreateInfo.format;
@@ -1010,6 +1107,10 @@ struct SwapchainImageContext {
 
         depthBuffer.Create(namer, m_vkDevice, memAllocator, depthFormat, swapchainCreateInfo);
         rp.Create(namer, m_vkDevice, colorFormat, depthFormat);
+        if (nativeLfDiagnostic) {
+            pipe.Dynamic(VK_DYNAMIC_STATE_VIEWPORT);
+            pipe.Dynamic(VK_DYNAMIC_STATE_SCISSOR);
+        }
         pipe.Create(m_vkDevice, size, layout, rp, sp, vb);
 
         swapchainImages.resize(capacity);
@@ -1284,7 +1385,7 @@ void Swapchain::Present(VkQueue queue, VkSemaphore drawComplete) {
 
 struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     VulkanGraphicsPlugin(const std::shared_ptr<Options>& options, std::shared_ptr<IPlatformPlugin> /*unused*/)
-        : m_clearColor(options->GetBackgroundClearColor()) {
+        : m_clearColor(options->GetBackgroundClearColor()), m_nativeLfDiagnostic(options->NativeLfDiagnostic) {
         m_graphicsBinding.type = GetGraphicsBindingType();
     };
 
@@ -1389,7 +1490,7 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
         debugInfo.pUserData = this;
 
         VkApplicationInfo appInfo{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-        appInfo.pApplicationName = "hello_xr";
+        appInfo.pApplicationName = m_nativeLfDiagnostic ? "native_lf_xr" : "hello_xr";
         appInfo.applicationVersion = 1;
         appInfo.pEngineName = "hello_xr";
         appInfo.engineVersion = 1;
@@ -1553,6 +1654,14 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     }
 
     int64_t SelectColorSwapchainFormat(const std::vector<int64_t>& runtimeFormats) const override {
+        if (m_nativeLfDiagnostic) {
+            const auto required = std::find(runtimeFormats.begin(), runtimeFormats.end(), VK_FORMAT_B8G8R8A8_UNORM);
+            if (required == runtimeFormats.end()) {
+                THROW("Native LF diagnostic requires VK_FORMAT_B8G8R8A8_UNORM swapchains");
+            }
+            return *required;
+        }
+
         // List of supported color swapchain formats.
         constexpr int64_t SupportedColorSwapchainFormats[] = {VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R8G8B8A8_SRGB,
                                                               VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM};
@@ -1578,9 +1687,11 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
         // Keep the buffer alive by adding it into the list of buffers.
         m_swapchainImageContexts.emplace_back(GetSwapchainImageType());
         SwapchainImageContext& swapchainImageContext = m_swapchainImageContexts.back();
+        const uint32_t diagnosticEyeIndex = static_cast<uint32_t>(m_swapchainImageContexts.size() - 1);
 
         std::vector<XrSwapchainImageBaseHeader*> bases = swapchainImageContext.Create(
-            m_namer, m_vkDevice, &m_memAllocator, capacity, swapchainCreateInfo, m_pipelineLayout, m_shaderProgram, m_drawBuffer);
+            m_namer, m_vkDevice, &m_memAllocator, capacity, swapchainCreateInfo, m_pipelineLayout, m_shaderProgram, m_drawBuffer,
+            m_nativeLfDiagnostic, diagnosticEyeIndex);
 
         // Map every swapchainImage base pointer to this context
         for (auto& base : bases) {
@@ -1607,10 +1718,9 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
 
         // Bind and clear eye render target
         static std::array<VkClearValue, 2> clearValues;
-        clearValues[0].color.float32[0] = m_clearColor[0];
-        clearValues[0].color.float32[1] = m_clearColor[1];
-        clearValues[0].color.float32[2] = m_clearColor[2];
-        clearValues[0].color.float32[3] = m_clearColor[3];
+        const std::array<float, 4> targetClear =
+            m_nativeLfDiagnostic ? std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f} : m_clearColor;
+        std::copy(targetClear.begin(), targetClear.end(), clearValues[0].color.float32);
         clearValues[1].depthStencil.depth = 1.0f;
         clearValues[1].depthStencil.stencil = 0;
         VkRenderPassBeginInfo renderPassBeginInfo{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
@@ -1628,29 +1738,53 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(m_cmdBuffer.buf, 0, 1, &m_drawBuffer.vtxBuf, &offset);
 
-        // Compute the view-projection transform.
-        // Note all matrixes (including OpenXR's) are column-major, right-handed.
-        const auto& pose = layerView.pose;
-        XrMatrix4x4f proj;
-        XrMatrix4x4f_CreateProjectionFov(&proj, GRAPHICS_VULKAN, layerView.fov, 0.05f, 100.0f);
-        XrMatrix4x4f toView;
-        XrMatrix4x4f_CreateFromRigidTransform(&toView, &pose);
-        XrMatrix4x4f view;
-        XrMatrix4x4f_InvertRigidBody(&view, &toView);
-        XrMatrix4x4f vp;
-        XrMatrix4x4f_Multiply(&vp, &proj, &view);
+        auto renderScene = [&](const XrPosef& pose, const XrFovf& fov) {
+            // Note all matrixes (including OpenXR's) are column-major, right-handed.
+            XrMatrix4x4f proj;
+            XrMatrix4x4f_CreateProjectionFov(&proj, GRAPHICS_VULKAN, fov, 0.05f, 100.0f);
+            XrMatrix4x4f toView;
+            XrMatrix4x4f_CreateFromRigidTransform(&toView, &pose);
+            XrMatrix4x4f view;
+            XrMatrix4x4f_InvertRigidBody(&view, &toView);
+            XrMatrix4x4f vp;
+            XrMatrix4x4f_Multiply(&vp, &proj, &view);
 
-        // Render each cube
-        for (const Cube& cube : cubes) {
-            // Compute the model-view-projection transform and push it.
-            XrMatrix4x4f model;
-            XrMatrix4x4f_CreateTranslationRotationScale(&model, &cube.Pose.position, &cube.Pose.orientation, &cube.Scale);
-            XrMatrix4x4f mvp;
-            XrMatrix4x4f_Multiply(&mvp, &vp, &model);
-            vkCmdPushConstants(m_cmdBuffer.buf, m_pipelineLayout.layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(mvp.m), &mvp.m[0]);
+            for (const Cube& cube : cubes) {
+                XrMatrix4x4f model;
+                XrMatrix4x4f_CreateTranslationRotationScale(&model, &cube.Pose.position, &cube.Pose.orientation, &cube.Scale);
+                XrMatrix4x4f mvp;
+                XrMatrix4x4f_Multiply(&mvp, &vp, &model);
+                vkCmdPushConstants(m_cmdBuffer.buf, m_pipelineLayout.layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(mvp.m),
+                                   &mvp.m[0]);
+                vkCmdDrawIndexed(m_cmdBuffer.buf, m_drawBuffer.count.idx, 1, 0, 0, 0);
+            }
+        };
 
-            // Draw the cube.
-            vkCmdDrawIndexed(m_cmdBuffer.buf, m_drawBuffer.count.idx, 1, 0, 0, 0);
+        if (m_nativeLfDiagnostic) {
+            CHECK(swapchainContext->size.width == NativeLfAtlasWidth && swapchainContext->size.height == NativeLfAtlasHeight);
+            CHECK(swapchainContext->diagnosticEyeIndex < 2);
+            const XrFovf fov = NativeLfSubviewFov();
+            constexpr std::array<float, 4> SubviewOffsets = {-0.03f, -0.01f, 0.01f, 0.03f};
+            for (uint32_t viewIndex = 0; viewIndex < NativeLfViewOrigins.size(); ++viewIndex) {
+                ClearNativeLfView(m_cmdBuffer.buf, swapchainContext->diagnosticEyeIndex, viewIndex);
+                const VkOffset2D origin = NativeLfViewOrigins[viewIndex];
+                const VkViewport viewport = {static_cast<float>(origin.x), static_cast<float>(origin.y),
+                                             static_cast<float>(NativeLfViewWidth), static_cast<float>(NativeLfViewHeight),
+                                             0.0f, 1.0f};
+                const VkRect2D scissor = {origin, {NativeLfViewWidth, NativeLfViewHeight}};
+                vkCmdSetViewport(m_cmdBuffer.buf, 0, 1, &viewport);
+                vkCmdSetScissor(m_cmdBuffer.buf, 0, 1, &scissor);
+
+                XrPosef subviewFromEye;
+                XrPosef_CreateIdentity(&subviewFromEye);
+                subviewFromEye.position.x = SubviewOffsets[viewIndex];
+                XrPosef subviewPose;
+                XrPosef_Multiply(&subviewPose, &layerView.pose, &subviewFromEye);
+                renderScene(subviewPose, fov);
+                RecordNativeLfPattern(m_cmdBuffer.buf, swapchainContext->diagnosticEyeIndex, viewIndex);
+            }
+        } else {
+            renderScene(layerView.pose, layerView.fov);
         }
 
         vkCmdEndRenderPass(m_cmdBuffer.buf);
@@ -1691,6 +1825,7 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     PipelineLayout m_pipelineLayout{};
     VertexBuffer<Geometry::Vertex> m_drawBuffer{};
     std::array<float, 4> m_clearColor;
+    bool m_nativeLfDiagnostic{false};
 
 #if defined(USE_MIRROR_WINDOW)
     Swapchain m_swapchain{};

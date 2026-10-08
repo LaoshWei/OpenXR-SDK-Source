@@ -55,6 +55,12 @@ inline const char* GetXrEnvironmentBlendModeStr(XrEnvironmentBlendMode environme
 struct Options {
     std::string GraphicsPlugin;
 
+#ifdef NATIVE_LF_XR_DIAGNOSTIC
+    static constexpr bool NativeLfDiagnostic = true;
+#else
+    static constexpr bool NativeLfDiagnostic = false;
+#endif
+
     std::string FormFactor{"Hmd"};
 
     std::string ViewConfiguration{"Stereo"};
@@ -75,6 +81,17 @@ struct Options {
         Parsed.FormFactor = GetXrFormFactor(FormFactor);
         Parsed.ViewConfigType = GetXrViewConfigurationType(ViewConfiguration);
         Parsed.EnvironmentBlendMode = GetXrEnvironmentBlendMode(EnvironmentBlendMode);
+
+        if (NativeLfDiagnostic && !EqualsIgnoreCase(GraphicsPlugin, "Vulkan") &&
+            !EqualsIgnoreCase(GraphicsPlugin, "Vulkan2")) {
+            throw std::invalid_argument("Native LF diagnostic requires the Vulkan graphics plugin");
+        }
+        if (NativeLfDiagnostic && Parsed.ViewConfigType != XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO) {
+            throw std::invalid_argument("Native LF diagnostic requires PRIMARY_STEREO");
+        }
+        if (NativeLfDiagnostic && Parsed.EnvironmentBlendMode != XR_ENVIRONMENT_BLEND_MODE_OPAQUE) {
+            throw std::invalid_argument("Native LF diagnostic requires opaque environment blend mode");
+        }
     }
 
     std::array<float, 4> GetBackgroundClearColor() const {

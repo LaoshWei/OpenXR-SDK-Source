@@ -192,7 +192,7 @@ struct OpenXrProgram : IOpenXrProgram {
         createInfo.enabledExtensionCount = (uint32_t)extensions.size();
         createInfo.enabledExtensionNames = extensions.data();
 
-        strcpy(createInfo.applicationInfo.applicationName, "HelloXR");
+        strcpy(createInfo.applicationInfo.applicationName, m_options->NativeLfDiagnostic ? "NativeLfXR" : "HelloXR");
 
         // Current version is 1.1.x, but hello_xr only requires 1.0.x
         createInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
@@ -605,6 +605,10 @@ struct OpenXrProgram : IOpenXrProgram {
         m_configViews.resize(viewCount, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
         CHECK_XRCMD(xrEnumerateViewConfigurationViews(m_instance, m_systemId, m_options->Parsed.ViewConfigType, viewCount,
                                                       &viewCount, m_configViews.data()));
+        if (m_options->NativeLfDiagnostic) {
+            CHECK_MSG(viewCount == 2, Fmt("Native LF diagnostic requires exactly two PRIMARY_STEREO views; runtime returned %u",
+                                         viewCount));
+        }
 
         // Create and cache view buffer for xrLocateViews later.
         m_views.resize(viewCount, {XR_TYPE_VIEW});
@@ -644,6 +648,12 @@ struct OpenXrProgram : IOpenXrProgram {
                            Fmt("Creating swapchain for view %d with dimensions Width=%d Height=%d SampleCount=%d", i,
                                vp.recommendedImageRectWidth, vp.recommendedImageRectHeight, vp.recommendedSwapchainSampleCount));
 
+                if (m_options->NativeLfDiagnostic) {
+                    CHECK_MSG(vp.recommendedImageRectWidth == 1920 && vp.recommendedImageRectHeight == 1080,
+                              Fmt("Native LF diagnostic requires 1920x1080 recommended extent for view %u; runtime returned %ux%u",
+                                  i, vp.recommendedImageRectWidth, vp.recommendedImageRectHeight));
+                }
+
                 // Create the swapchain.
                 XrSwapchainCreateInfo swapchainCreateInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
                 swapchainCreateInfo.arraySize = 1;
@@ -652,7 +662,8 @@ struct OpenXrProgram : IOpenXrProgram {
                 swapchainCreateInfo.height = vp.recommendedImageRectHeight;
                 swapchainCreateInfo.mipCount = 1;
                 swapchainCreateInfo.faceCount = 1;
-                swapchainCreateInfo.sampleCount = m_graphicsPlugin->GetSupportedSwapchainSampleCount(vp);
+                swapchainCreateInfo.sampleCount =
+                    m_options->NativeLfDiagnostic ? 1 : m_graphicsPlugin->GetSupportedSwapchainSampleCount(vp);
                 swapchainCreateInfo.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
                 Swapchain swapchain;
                 swapchain.width = swapchainCreateInfo.width;
@@ -669,6 +680,12 @@ struct OpenXrProgram : IOpenXrProgram {
                 CHECK_XRCMD(xrEnumerateSwapchainImages(swapchain.handle, imageCount, &imageCount, swapchainImages[0]));
 
                 m_swapchainImages.insert(std::make_pair(swapchain.handle, std::move(swapchainImages)));
+            }
+
+            if (m_options->NativeLfDiagnostic) {
+                Log::Write(Log::Level::Info,
+                           "Native LF diagnostic contract: views=2 extent=1920x1080 "
+                           "format=VK_FORMAT_B8G8R8A8_UNORM array_size=1 image_array_index=0 sample_count=1");
             }
         }
     }
@@ -975,6 +992,7 @@ struct OpenXrProgram : IOpenXrProgram {
             projectionLayerViews[i].subImage.swapchain = viewSwapchain.handle;
             projectionLayerViews[i].subImage.imageRect.offset = {0, 0};
             projectionLayerViews[i].subImage.imageRect.extent = {viewSwapchain.width, viewSwapchain.height};
+            projectionLayerViews[i].subImage.imageArrayIndex = 0;
 
             const XrSwapchainImageBaseHeader* const swapchainImage = m_swapchainImages[viewSwapchain.handle][swapchainImageIndex];
             m_graphicsPlugin->RenderView(projectionLayerViews[i], swapchainImage, m_colorSwapchainFormat, cubes);
