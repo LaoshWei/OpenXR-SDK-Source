@@ -61,6 +61,8 @@ struct Options {
     static constexpr bool NativeLfDiagnostic = false;
 #endif
 
+    std::string NativeLfAtlasFormat{"bgra"};
+
     std::string FormFactor{"Hmd"};
 
     std::string ViewConfiguration{"Stereo"};
@@ -82,6 +84,10 @@ struct Options {
         Parsed.ViewConfigType = GetXrViewConfigurationType(ViewConfiguration);
         Parsed.EnvironmentBlendMode = GetXrEnvironmentBlendMode(EnvironmentBlendMode);
 
+        if (NativeLfDiagnostic && !EqualsIgnoreCase(NativeLfAtlasFormat, "bgra") &&
+            !EqualsIgnoreCase(NativeLfAtlasFormat, "rgba")) {
+            throw std::invalid_argument("Native LF atlas format must be bgra or rgba");
+        }
         if (NativeLfDiagnostic && !EqualsIgnoreCase(GraphicsPlugin, "Vulkan") &&
             !EqualsIgnoreCase(GraphicsPlugin, "Vulkan2")) {
             throw std::invalid_argument("Native LF diagnostic requires the Vulkan graphics plugin");

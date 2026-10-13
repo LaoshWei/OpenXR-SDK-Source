@@ -688,8 +688,9 @@ struct OpenXrProgram : IOpenXrProgram {
 
             if (m_options->NativeLfDiagnostic) {
                 Log::Write(Log::Level::Info,
-                           "Native LF diagnostic contract: views=2 extent=1920x1080 "
-                           "format=VK_FORMAT_B8G8R8A8_UNORM array_size=1 image_array_index=0 sample_count=1");
+                           Fmt("Native LF diagnostic contract: views=2 extent=1920x1080 "
+                           "format=VK_FORMAT_%s_UNORM array_size=1 image_array_index=0 sample_count=1",
+                           EqualsIgnoreCase(m_options->NativeLfAtlasFormat, "rgba") ? "R8G8B8A8" : "B8G8R8A8"));
             }
         }
     }

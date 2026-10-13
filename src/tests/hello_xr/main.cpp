@@ -69,6 +69,9 @@ void ShowHelp() {
     Log::Write(Log::Level::Info,
                "HelloXr --graphics|-g <Graphics API> [--formfactor|-ff <Form factor>] [--viewconfig|-vc <View config>] "
                "[--blendmode|-bm <Blend mode>] [--space|-s <Space>] [--verbose|-v]");
+    if (Options::NativeLfDiagnostic) {
+        Log::Write(Log::Level::Info, "Native LF: --atlas-format <bgra|rgba> (default: bgra)");
+    }
     Log::Write(Log::Level::Info, "Graphics APIs:            D3D11, D3D12, OpenGLES, OpenGL, Vulkan2, Vulkan, Metal");
     Log::Write(Log::Level::Info, "Form factors:             Hmd, Handheld");
     Log::Write(Log::Level::Info, "View configurations:      Mono, Stereo");
@@ -99,6 +102,8 @@ bool UpdateOptionsFromCommandLine(Options& options, int argc, char* argv[]) {
             options.EnvironmentBlendMode = getNextArg();
         } else if (EqualsIgnoreCase(arg, "--space") || EqualsIgnoreCase(arg, "-s")) {
             options.AppSpace = getNextArg();
+        } else if (EqualsIgnoreCase(arg, "--atlas-format") && Options::NativeLfDiagnostic) {
+            options.NativeLfAtlasFormat = getNextArg();
         } else if (EqualsIgnoreCase(arg, "--verbose") || EqualsIgnoreCase(arg, "-v")) {
             Log::SetLevel(Log::Level::Verbose);
         } else if (EqualsIgnoreCase(arg, "--help") || EqualsIgnoreCase(arg, "-h")) {
