@@ -533,6 +533,10 @@ struct OpenXrProgram : IOpenXrProgram {
     void CreateVisualizedSpaces() {
         CHECK(m_session != XR_NULL_HANDLE);
 
+        if (m_options->NativeLfDiagnostic) {
+            return;
+        }
+
         std::string visualizedSpaces[] = {"ViewFront",        "Local", "Stage", "StageLeft", "StageRight", "StageLeftRotated",
                                           "StageRightRotated"};
 
@@ -935,6 +939,31 @@ struct OpenXrProgram : IOpenXrProgram {
         // For each locatable space that we want to visualize, render a 25cm cube.
         std::vector<Cube> cubes;
 
+        if (m_options->NativeLfDiagnostic) {
+            if (m_nativeLfWorldCubes.empty()) {
+                // Freeze the initial head pose in app space (LOCAL by default). Subsequent
+                // tracking updates move the cameras, never these world-space objects.
+                XrPosef initialHeadPose = m_views[0].pose;
+                initialHeadPose.position = {
+                    (m_views[0].pose.position.x + m_views[1].pose.position.x) * 0.5f,
+                    (m_views[0].pose.position.y + m_views[1].pose.position.y) * 0.5f,
+                    (m_views[0].pose.position.z + m_views[1].pose.position.z) * 0.5f};
+                const std::array<Cube, 3> scene = {{
+                    {Math::Pose::Translation({-0.18f, -0.06f, -2.0f}), {0.16f, 0.16f, 0.16f}},
+                    {Math::Pose::Translation({0.24f, 0.08f, -3.5f}), {0.24f, 0.24f, 0.24f}},
+                    {Math::Pose::Translation({0.0f, 0.0f, -5.0f}), {0.32f, 0.32f, 0.32f}},
+                }};
+                for (const Cube& cube : scene) {
+                    XrPosef worldPose;
+                    XrPosef_Multiply(&worldPose, &initialHeadPose, &cube.Pose);
+                    m_nativeLfWorldCubes.push_back(Cube{worldPose, cube.Scale});
+                }
+                Log::Write(Log::Level::Info,
+                           "Native LF world scene: three fixed cubes at initial depths 2m, 3.5m, 5m; no ViewFront or hand cubes");
+            }
+            cubes = m_nativeLfWorldCubes;
+        }
+
         for (XrSpace visualizedSpace : m_visualizedSpaces) {
             XrSpaceLocation spaceLocation{XR_TYPE_SPACE_LOCATION};
             res = xrLocateSpace(visualizedSpace, m_appSpace, predictedDisplayTime, &spaceLocation);
@@ -952,6 +981,9 @@ struct OpenXrProgram : IOpenXrProgram {
         // Render a 10cm cube scaled by grabAction for each hand. Note renderHand will only be
         // true when the application has focus.
         for (auto hand : {Side::LEFT, Side::RIGHT}) {
+            if (m_options->NativeLfDiagnostic) {
+                continue;
+            }
             XrSpaceLocation spaceLocation{XR_TYPE_SPACE_LOCATION};
             res = xrLocateSpace(m_input.handSpace[hand], m_appSpace, predictedDisplayTime, &spaceLocation);
             CHECK_XRRESULT(res, "xrLocateSpace");
@@ -1018,6 +1050,7 @@ struct OpenXrProgram : IOpenXrProgram {
     XrInstance m_instance{XR_NULL_HANDLE};
     XrSession m_session{XR_NULL_HANDLE};
     XrSpace m_appSpace{XR_NULL_HANDLE};
+    std::vector<Cube> m_nativeLfWorldCubes;
     XrSystemId m_systemId{XR_NULL_SYSTEM_ID};
 
     std::vector<XrViewConfigurationView> m_configViews;

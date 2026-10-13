@@ -9,6 +9,7 @@
 #include "options.h"
 
 #ifdef XR_USE_GRAPHICS_API_VULKAN
+#include <cstdlib>
 #include <common/vulkan_debug_object_namer.hpp>
 #include <common/xr_linear.h>
 
@@ -1387,6 +1388,8 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     VulkanGraphicsPlugin(const std::shared_ptr<Options>& options, std::shared_ptr<IPlatformPlugin> /*unused*/)
         : m_clearColor(options->GetBackgroundClearColor()), m_nativeLfDiagnostic(options->NativeLfDiagnostic) {
         m_graphicsBinding.type = GetGraphicsBindingType();
+        const char* patterns = std::getenv("NATIVE_LF_XR_PATTERNS");
+        m_nativeLfPatterns = patterns == nullptr || std::string(patterns) != "0";
     };
 
     std::vector<std::string> GetInstanceExtensions() const override { return {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME}; }
@@ -1766,7 +1769,13 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
             const XrFovf fov = NativeLfSubviewFov();
             constexpr std::array<float, 4> SubviewOffsets = {-0.03f, -0.01f, 0.01f, 0.03f};
             for (uint32_t viewIndex = 0; viewIndex < NativeLfViewOrigins.size(); ++viewIndex) {
-                ClearNativeLfView(m_cmdBuffer.buf, swapchainContext->diagnosticEyeIndex, viewIndex);
+                if (m_nativeLfPatterns) {
+                    ClearNativeLfView(m_cmdBuffer.buf, swapchainContext->diagnosticEyeIndex, viewIndex);
+                } else {
+                    ClearNativeLfRect(m_cmdBuffer.buf,
+                                      NativeLfLocalRect(viewIndex, 0, 0, NativeLfViewWidth, NativeLfViewHeight),
+                                      {0.08f, 0.08f, 0.08f, 1.0f});
+                }
                 const VkOffset2D origin = NativeLfViewOrigins[viewIndex];
                 const VkViewport viewport = {static_cast<float>(origin.x), static_cast<float>(origin.y),
                                              static_cast<float>(NativeLfViewWidth), static_cast<float>(NativeLfViewHeight),
@@ -1781,7 +1790,9 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
                 XrPosef subviewPose;
                 XrPosef_Multiply(&subviewPose, &layerView.pose, &subviewFromEye);
                 renderScene(subviewPose, fov);
-                RecordNativeLfPattern(m_cmdBuffer.buf, swapchainContext->diagnosticEyeIndex, viewIndex);
+                if (m_nativeLfPatterns) {
+                    RecordNativeLfPattern(m_cmdBuffer.buf, swapchainContext->diagnosticEyeIndex, viewIndex);
+                }
             }
         } else {
             renderScene(layerView.pose, layerView.fov);
@@ -1826,6 +1837,7 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     VertexBuffer<Geometry::Vertex> m_drawBuffer{};
     std::array<float, 4> m_clearColor;
     bool m_nativeLfDiagnostic{false};
+    bool m_nativeLfPatterns{true};
 
 #if defined(USE_MIRROR_WINDOW)
     Swapchain m_swapchain{};
