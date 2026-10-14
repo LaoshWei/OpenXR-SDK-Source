@@ -61,7 +61,7 @@ struct Options {
     static constexpr bool NativeLfDiagnostic = false;
 #endif
 
-    std::string NativeLfAtlasFormat{"bgra"};
+    std::string NativeLfAtlasFormat{"auto"};
 
     std::string FormFactor{"Hmd"};
 
@@ -84,9 +84,10 @@ struct Options {
         Parsed.ViewConfigType = GetXrViewConfigurationType(ViewConfiguration);
         Parsed.EnvironmentBlendMode = GetXrEnvironmentBlendMode(EnvironmentBlendMode);
 
-        if (NativeLfDiagnostic && !EqualsIgnoreCase(NativeLfAtlasFormat, "bgra") &&
+        if (NativeLfDiagnostic && !EqualsIgnoreCase(NativeLfAtlasFormat, "auto") &&
+            !EqualsIgnoreCase(NativeLfAtlasFormat, "bgra") &&
             !EqualsIgnoreCase(NativeLfAtlasFormat, "rgba")) {
-            throw std::invalid_argument("Native LF atlas format must be bgra or rgba");
+            throw std::invalid_argument("Native LF atlas format must be auto, bgra or rgba");
         }
         if (NativeLfDiagnostic && !EqualsIgnoreCase(GraphicsPlugin, "Vulkan") &&
             !EqualsIgnoreCase(GraphicsPlugin, "Vulkan2")) {

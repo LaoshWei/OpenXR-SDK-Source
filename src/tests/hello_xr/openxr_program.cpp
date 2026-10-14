@@ -627,6 +627,13 @@ struct OpenXrProgram : IOpenXrProgram {
                                                     swapchainFormats.data()));
             CHECK(swapchainFormatCount == swapchainFormats.size());
             m_colorSwapchainFormat = m_graphicsPlugin->SelectColorSwapchainFormat(swapchainFormats);
+#ifdef XR_USE_GRAPHICS_API_VULKAN
+            if (m_options->NativeLfDiagnostic) {
+                Log::Write(Log::Level::Info,
+                           Fmt("Native LF atlas selected: format=VK_FORMAT_%s_UNORM output=VK_FORMAT_B8G8R8A8_UNORM",
+                               m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_UNORM ? "R8G8B8A8" : "B8G8R8A8"));
+            }
+#endif
 
             // Print swapchain formats and the selected one.
             {
@@ -645,53 +652,71 @@ struct OpenXrProgram : IOpenXrProgram {
                 Log::Write(Log::Level::Verbose, Fmt("Swapchain Formats: %s", swapchainFormatsString.c_str()));
             }
 
-            // Create a swapchain for each view.
-            for (uint32_t i = 0; i < viewCount; i++) {
-                const XrViewConfigurationView& vp = m_configViews[i];
-                Log::Write(Log::Level::Info,
-                           Fmt("Creating swapchain for view %d with dimensions Width=%d Height=%d SampleCount=%d", i,
-                               vp.recommendedImageRectWidth, vp.recommendedImageRectHeight, vp.recommendedSwapchainSampleCount));
+            // Keep the selected format for this session; report the failing stage without trying another format.
+            const char* nativeLfStage = "xrCreateSwapchain";
+            try {
+                // Create a swapchain for each view.
+                for (uint32_t i = 0; i < viewCount; i++) {
+                    const XrViewConfigurationView& vp = m_configViews[i];
+                    Log::Write(Log::Level::Info,
+                               Fmt("Creating swapchain for view %d with dimensions Width=%d Height=%d SampleCount=%d", i,
+                                   vp.recommendedImageRectWidth, vp.recommendedImageRectHeight, vp.recommendedSwapchainSampleCount));
 
-                if (m_options->NativeLfDiagnostic) {
-                    CHECK_MSG(vp.recommendedImageRectWidth == 1920 && vp.recommendedImageRectHeight == 1080,
-                              Fmt("Native LF diagnostic requires 1920x1080 recommended extent for view %u; runtime returned %ux%u",
-                                  i, vp.recommendedImageRectWidth, vp.recommendedImageRectHeight));
+                    if (m_options->NativeLfDiagnostic) {
+                        nativeLfStage = "validate view extent";
+                        CHECK_MSG(vp.recommendedImageRectWidth == 1920 && vp.recommendedImageRectHeight == 1080,
+                                  Fmt("Native LF diagnostic requires 1920x1080 recommended extent for view %u; runtime returned %ux%u",
+                                      i, vp.recommendedImageRectWidth, vp.recommendedImageRectHeight));
+                    }
+
+                    // Create the swapchain.
+                    XrSwapchainCreateInfo swapchainCreateInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+                    swapchainCreateInfo.arraySize = 1;
+                    swapchainCreateInfo.format = m_colorSwapchainFormat;
+                    swapchainCreateInfo.width = vp.recommendedImageRectWidth;
+                    swapchainCreateInfo.height = vp.recommendedImageRectHeight;
+                    swapchainCreateInfo.mipCount = 1;
+                    swapchainCreateInfo.faceCount = 1;
+                    swapchainCreateInfo.sampleCount =
+                        m_options->NativeLfDiagnostic ? 1 : m_graphicsPlugin->GetSupportedSwapchainSampleCount(vp);
+                    swapchainCreateInfo.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+                    Swapchain swapchain;
+                    swapchain.width = swapchainCreateInfo.width;
+                    swapchain.height = swapchainCreateInfo.height;
+                    nativeLfStage = "xrCreateSwapchain";
+                    CHECK_XRCMD(xrCreateSwapchain(m_session, &swapchainCreateInfo, &swapchain.handle));
+
+                    m_swapchains.push_back(swapchain);
+
+                    uint32_t imageCount;
+                    nativeLfStage = "xrEnumerateSwapchainImages";
+                    CHECK_XRCMD(xrEnumerateSwapchainImages(swapchain.handle, 0, &imageCount, nullptr));
+                    // XXX This should really just return XrSwapchainImageBaseHeader*
+                    nativeLfStage = "AllocateSwapchainImageStructs";
+                    std::vector<XrSwapchainImageBaseHeader*> swapchainImages =
+                        m_graphicsPlugin->AllocateSwapchainImageStructs(imageCount, swapchainCreateInfo);
+                    nativeLfStage = "xrEnumerateSwapchainImages";
+                    CHECK_XRCMD(xrEnumerateSwapchainImages(swapchain.handle, imageCount, &imageCount, swapchainImages[0]));
+
+                    m_swapchainImages.insert(std::make_pair(swapchain.handle, std::move(swapchainImages)));
                 }
-
-                // Create the swapchain.
-                XrSwapchainCreateInfo swapchainCreateInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-                swapchainCreateInfo.arraySize = 1;
-                swapchainCreateInfo.format = m_colorSwapchainFormat;
-                swapchainCreateInfo.width = vp.recommendedImageRectWidth;
-                swapchainCreateInfo.height = vp.recommendedImageRectHeight;
-                swapchainCreateInfo.mipCount = 1;
-                swapchainCreateInfo.faceCount = 1;
-                swapchainCreateInfo.sampleCount =
-                    m_options->NativeLfDiagnostic ? 1 : m_graphicsPlugin->GetSupportedSwapchainSampleCount(vp);
-                swapchainCreateInfo.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
-                Swapchain swapchain;
-                swapchain.width = swapchainCreateInfo.width;
-                swapchain.height = swapchainCreateInfo.height;
-                CHECK_XRCMD(xrCreateSwapchain(m_session, &swapchainCreateInfo, &swapchain.handle));
-
-                m_swapchains.push_back(swapchain);
-
-                uint32_t imageCount;
-                CHECK_XRCMD(xrEnumerateSwapchainImages(swapchain.handle, 0, &imageCount, nullptr));
-                // XXX This should really just return XrSwapchainImageBaseHeader*
-                std::vector<XrSwapchainImageBaseHeader*> swapchainImages =
-                    m_graphicsPlugin->AllocateSwapchainImageStructs(imageCount, swapchainCreateInfo);
-                CHECK_XRCMD(xrEnumerateSwapchainImages(swapchain.handle, imageCount, &imageCount, swapchainImages[0]));
-
-                m_swapchainImages.insert(std::make_pair(swapchain.handle, std::move(swapchainImages)));
+            } catch (const std::exception& error) {
+                if (m_options->NativeLfDiagnostic) {
+                    Log::Write(Log::Level::Error,
+                               Fmt("Native LF atlas failure: format=%lld stage=%s error=%s",
+                                   static_cast<long long>(m_colorSwapchainFormat), nativeLfStage, error.what()));
+                }
+                throw;
             }
 
+#ifdef XR_USE_GRAPHICS_API_VULKAN
             if (m_options->NativeLfDiagnostic) {
                 Log::Write(Log::Level::Info,
                            Fmt("Native LF diagnostic contract: views=2 extent=1920x1080 "
                            "format=VK_FORMAT_%s_UNORM array_size=1 image_array_index=0 sample_count=1",
-                           EqualsIgnoreCase(m_options->NativeLfAtlasFormat, "rgba") ? "R8G8B8A8" : "B8G8R8A8"));
+                           m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_UNORM ? "R8G8B8A8" : "B8G8R8A8"));
             }
+#endif
         }
     }
 
@@ -908,7 +933,13 @@ struct OpenXrProgram : IOpenXrProgram {
         frameEndInfo.environmentBlendMode = m_options->Parsed.EnvironmentBlendMode;
         frameEndInfo.layerCount = (uint32_t)layers.size();
         frameEndInfo.layers = layers.data();
-        CHECK_XRCMD(xrEndFrame(m_session, &frameEndInfo));
+        const XrResult endResult = xrEndFrame(m_session, &frameEndInfo);
+        if (m_options->NativeLfDiagnostic && XR_FAILED(endResult)) {
+            Log::Write(Log::Level::Error,
+                       Fmt("Native LF atlas failure: format=%lld stage=xrEndFrame error=%d",
+                           static_cast<long long>(m_colorSwapchainFormat), static_cast<int>(endResult)));
+        }
+        CHECK_XRRESULT(endResult, "xrEndFrame");
     }
 
     bool RenderLayer(XrTime predictedDisplayTime, std::vector<XrCompositionLayerProjectionView>& projectionLayerViews,

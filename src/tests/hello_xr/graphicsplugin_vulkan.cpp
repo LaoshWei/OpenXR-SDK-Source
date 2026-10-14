@@ -1387,8 +1387,7 @@ void Swapchain::Present(VkQueue queue, VkSemaphore drawComplete) {
 struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     VulkanGraphicsPlugin(const std::shared_ptr<Options>& options, std::shared_ptr<IPlatformPlugin> /*unused*/)
         : m_clearColor(options->GetBackgroundClearColor()), m_nativeLfDiagnostic(options->NativeLfDiagnostic),
-          m_nativeLfAtlasFormat(EqualsIgnoreCase(options->NativeLfAtlasFormat, "rgba") ? VK_FORMAT_R8G8B8A8_UNORM
-                                                                                   : VK_FORMAT_B8G8R8A8_UNORM) {
+          m_nativeLfAtlasFormat(options->NativeLfAtlasFormat) {
         m_graphicsBinding.type = GetGraphicsBindingType();
         const char* patterns = std::getenv("NATIVE_LF_XR_PATTERNS");
         m_nativeLfPatterns = patterns == nullptr || std::string(patterns) != "0";
@@ -1660,12 +1659,29 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
 
     int64_t SelectColorSwapchainFormat(const std::vector<int64_t>& runtimeFormats) const override {
         if (m_nativeLfDiagnostic) {
-            const auto required = std::find(runtimeFormats.begin(), runtimeFormats.end(), m_nativeLfAtlasFormat);
-            if (required == runtimeFormats.end()) {
-                THROW(Fmt("Native LF diagnostic requested atlas format %lld is not advertised by the runtime",
-                          static_cast<long long>(m_nativeLfAtlasFormat)));
+            const auto advertised = [&](VkFormat format) {
+                return std::find(runtimeFormats.begin(), runtimeFormats.end(), format) != runtimeFormats.end();
+            };
+            if (!EqualsIgnoreCase(m_nativeLfAtlasFormat, "auto")) {
+                const VkFormat required = EqualsIgnoreCase(m_nativeLfAtlasFormat, "rgba") ? VK_FORMAT_R8G8B8A8_UNORM
+                                                                                          : VK_FORMAT_B8G8R8A8_UNORM;
+                if (!advertised(required)) {
+                    THROW(Fmt("Native LF atlas selection failed: requested=%s format=%lld is not advertised by the runtime",
+                              m_nativeLfAtlasFormat.c_str(), static_cast<long long>(required)));
+                }
+                return required;
             }
-            return *required;
+#if defined(__ANDROID__)
+            constexpr VkFormat preferred[] = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM};
+#else
+            constexpr VkFormat preferred[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM};
+#endif
+            for (VkFormat format : preferred) {
+                if (advertised(format)) {
+                    return format;
+                }
+            }
+            THROW("Native LF atlas selection failed: runtime advertises no eligible BGRA/RGBA UNORM format");
         }
 
         // List of supported color swapchain formats.
@@ -1840,7 +1856,7 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     VertexBuffer<Geometry::Vertex> m_drawBuffer{};
     std::array<float, 4> m_clearColor;
     bool m_nativeLfDiagnostic{false};
-    VkFormat m_nativeLfAtlasFormat{VK_FORMAT_B8G8R8A8_UNORM};
+    std::string m_nativeLfAtlasFormat;
     bool m_nativeLfPatterns{true};
 
 #if defined(USE_MIRROR_WINDOW)

@@ -70,7 +70,7 @@ void ShowHelp() {
                "HelloXr --graphics|-g <Graphics API> [--formfactor|-ff <Form factor>] [--viewconfig|-vc <View config>] "
                "[--blendmode|-bm <Blend mode>] [--space|-s <Space>] [--verbose|-v]");
     if (Options::NativeLfDiagnostic) {
-        Log::Write(Log::Level::Info, "Native LF: --atlas-format <bgra|rgba> (default: bgra)");
+        Log::Write(Log::Level::Info, "Native LF: --atlas-format <auto|bgra|rgba> (default: auto)");
     }
     Log::Write(Log::Level::Info, "Graphics APIs:            D3D11, D3D12, OpenGLES, OpenGL, Vulkan2, Vulkan, Metal");
     Log::Write(Log::Level::Info, "Form factors:             Hmd, Handheld");
