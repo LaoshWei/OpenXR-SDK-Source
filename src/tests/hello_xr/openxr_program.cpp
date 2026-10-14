@@ -910,36 +910,43 @@ struct OpenXrProgram : IOpenXrProgram {
     }
 
     void RenderFrame() override {
-        CHECK(m_session != XR_NULL_HANDLE);
+        try {
+            CHECK(m_session != XR_NULL_HANDLE);
 
-        XrFrameWaitInfo frameWaitInfo{XR_TYPE_FRAME_WAIT_INFO};
-        XrFrameState frameState{XR_TYPE_FRAME_STATE};
-        CHECK_XRCMD(xrWaitFrame(m_session, &frameWaitInfo, &frameState));
+            m_nativeLfFrameStage = "xrWaitFrame";
+            XrFrameWaitInfo frameWaitInfo{XR_TYPE_FRAME_WAIT_INFO};
+            XrFrameState frameState{XR_TYPE_FRAME_STATE};
+            CHECK_XRCMD(xrWaitFrame(m_session, &frameWaitInfo, &frameState));
 
-        XrFrameBeginInfo frameBeginInfo{XR_TYPE_FRAME_BEGIN_INFO};
-        CHECK_XRCMD(xrBeginFrame(m_session, &frameBeginInfo));
+            m_nativeLfFrameStage = "xrBeginFrame";
+            XrFrameBeginInfo frameBeginInfo{XR_TYPE_FRAME_BEGIN_INFO};
+            CHECK_XRCMD(xrBeginFrame(m_session, &frameBeginInfo));
 
-        std::vector<XrCompositionLayerBaseHeader*> layers;
-        XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-        std::vector<XrCompositionLayerProjectionView> projectionLayerViews;
-        if (frameState.shouldRender == XR_TRUE) {
-            if (RenderLayer(frameState.predictedDisplayTime, projectionLayerViews, layer)) {
-                layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&layer));
+            std::vector<XrCompositionLayerBaseHeader*> layers;
+            XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+            std::vector<XrCompositionLayerProjectionView> projectionLayerViews;
+            if (frameState.shouldRender == XR_TRUE) {
+                m_nativeLfFrameStage = "RenderLayer";
+                if (RenderLayer(frameState.predictedDisplayTime, projectionLayerViews, layer)) {
+                    layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&layer));
+                }
             }
-        }
 
-        XrFrameEndInfo frameEndInfo{XR_TYPE_FRAME_END_INFO};
-        frameEndInfo.displayTime = frameState.predictedDisplayTime;
-        frameEndInfo.environmentBlendMode = m_options->Parsed.EnvironmentBlendMode;
-        frameEndInfo.layerCount = (uint32_t)layers.size();
-        frameEndInfo.layers = layers.data();
-        const XrResult endResult = xrEndFrame(m_session, &frameEndInfo);
-        if (m_options->NativeLfDiagnostic && XR_FAILED(endResult)) {
-            Log::Write(Log::Level::Error,
-                       Fmt("Native LF atlas failure: format=%lld stage=xrEndFrame error=%d",
-                           static_cast<long long>(m_colorSwapchainFormat), static_cast<int>(endResult)));
+            XrFrameEndInfo frameEndInfo{XR_TYPE_FRAME_END_INFO};
+            frameEndInfo.displayTime = frameState.predictedDisplayTime;
+            frameEndInfo.environmentBlendMode = m_options->Parsed.EnvironmentBlendMode;
+            frameEndInfo.layerCount = (uint32_t)layers.size();
+            frameEndInfo.layers = layers.data();
+            m_nativeLfFrameStage = "xrEndFrame";
+            CHECK_XRCMD(xrEndFrame(m_session, &frameEndInfo));
+        } catch (const std::exception& error) {
+            if (m_options->NativeLfDiagnostic) {
+                Log::Write(Log::Level::Error,
+                           Fmt("Native LF atlas failure: format=%lld stage=%s error=%s",
+                               static_cast<long long>(m_colorSwapchainFormat), m_nativeLfFrameStage, error.what()));
+            }
+            throw;
         }
-        CHECK_XRRESULT(endResult, "xrEndFrame");
     }
 
     bool RenderLayer(XrTime predictedDisplayTime, std::vector<XrCompositionLayerProjectionView>& projectionLayerViews,
@@ -955,6 +962,7 @@ struct OpenXrProgram : IOpenXrProgram {
         viewLocateInfo.displayTime = predictedDisplayTime;
         viewLocateInfo.space = m_appSpace;
 
+        m_nativeLfFrameStage = "xrLocateViews";
         res = xrLocateViews(m_session, &viewLocateInfo, &viewState, viewCapacityInput, &viewCountOutput, m_views.data());
         CHECK_XRRESULT(res, "xrLocateViews");
         if ((viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) == 0 ||
@@ -998,6 +1006,7 @@ struct OpenXrProgram : IOpenXrProgram {
 
         for (XrSpace visualizedSpace : m_visualizedSpaces) {
             XrSpaceLocation spaceLocation{XR_TYPE_SPACE_LOCATION};
+            m_nativeLfFrameStage = "xrLocateSpace";
             res = xrLocateSpace(visualizedSpace, m_appSpace, predictedDisplayTime, &spaceLocation);
             CHECK_XRRESULT(res, "xrLocateSpace");
             if (XR_UNQUALIFIED_SUCCESS(res)) {
@@ -1017,6 +1026,7 @@ struct OpenXrProgram : IOpenXrProgram {
                 continue;
             }
             XrSpaceLocation spaceLocation{XR_TYPE_SPACE_LOCATION};
+            m_nativeLfFrameStage = "xrLocateSpace";
             res = xrLocateSpace(m_input.handSpace[hand], m_appSpace, predictedDisplayTime, &spaceLocation);
             CHECK_XRRESULT(res, "xrLocateSpace");
             if (XR_UNQUALIFIED_SUCCESS(res)) {
@@ -1044,10 +1054,12 @@ struct OpenXrProgram : IOpenXrProgram {
             XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
 
             uint32_t swapchainImageIndex;
+            m_nativeLfFrameStage = "xrAcquireSwapchainImage";
             CHECK_XRCMD(xrAcquireSwapchainImage(viewSwapchain.handle, &acquireInfo, &swapchainImageIndex));
 
             XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
             waitInfo.timeout = XR_INFINITE_DURATION;
+            m_nativeLfFrameStage = "xrWaitSwapchainImage";
             CHECK_XRCMD(xrWaitSwapchainImage(viewSwapchain.handle, &waitInfo));
 
             projectionLayerViews[i] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
@@ -1059,9 +1071,11 @@ struct OpenXrProgram : IOpenXrProgram {
             projectionLayerViews[i].subImage.imageArrayIndex = 0;
 
             const XrSwapchainImageBaseHeader* const swapchainImage = m_swapchainImages[viewSwapchain.handle][swapchainImageIndex];
+            m_nativeLfFrameStage = "RenderView";
             m_graphicsPlugin->RenderView(projectionLayerViews[i], swapchainImage, m_colorSwapchainFormat, cubes);
 
             XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+            m_nativeLfFrameStage = "xrReleaseSwapchainImage";
             CHECK_XRCMD(xrReleaseSwapchainImage(viewSwapchain.handle, &releaseInfo));
         }
 
@@ -1090,6 +1104,7 @@ struct OpenXrProgram : IOpenXrProgram {
     std::map<XrSwapchain, std::vector<XrSwapchainImageBaseHeader*>> m_swapchainImages;
     std::vector<XrView> m_views;
     int64_t m_colorSwapchainFormat{-1};
+    const char* m_nativeLfFrameStage{"RenderFrame"};
 
     std::vector<XrSpace> m_visualizedSpaces;
 
