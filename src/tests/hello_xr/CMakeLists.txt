@@ -50,6 +50,7 @@ set(LOCAL_SOURCE
 set(VULKAN_SHADERS vulkan_shaders/frag.glsl vulkan_shaders/vert.glsl)
 
 if(ANDROID)
+    option(HELLOXR_NATIVE_LF_DIAGNOSTIC "Build the separate Android Native LF diagnostic flavor" OFF)
     add_library(
         hello_xr MODULE
         ${LOCAL_SOURCE}
@@ -60,6 +61,9 @@ if(ANDROID)
     target_link_libraries(
         hello_xr PRIVATE ${ANDROID_LIBRARY} ${ANDROID_LOG_LIBRARY}
     )
+    if(HELLOXR_NATIVE_LF_DIAGNOSTIC)
+        target_compile_definitions(hello_xr PRIVATE NATIVE_LF_XR_DIAGNOSTIC)
+    endif()
 
     # Only for Android because it lacks a command line
     set(HELLOXR_DEFAULT_GRAPHICS_PLUGIN

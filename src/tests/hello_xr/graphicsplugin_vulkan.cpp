@@ -1387,7 +1387,7 @@ void Swapchain::Present(VkQueue queue, VkSemaphore drawComplete) {
 struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     VulkanGraphicsPlugin(const std::shared_ptr<Options>& options, std::shared_ptr<IPlatformPlugin> /*unused*/)
         : m_clearColor(options->GetBackgroundClearColor()), m_nativeLfDiagnostic(options->NativeLfDiagnostic),
-          m_nativeLfAtlasFormat(options->NativeLfAtlasFormat) {
+          m_nativeLfAtlasFormat(options->NativeLfAtlasFormat), m_colorSwapchainFormat(options->ColorSwapchainFormat) {
         m_graphicsBinding.type = GetGraphicsBindingType();
         const char* patterns = std::getenv("NATIVE_LF_XR_PATTERNS");
         m_nativeLfPatterns = patterns == nullptr || std::string(patterns) != "0";
@@ -1684,6 +1684,12 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
             THROW("Native LF atlas selection failed: runtime advertises no eligible BGRA/RGBA UNORM format");
         }
 
+        if (EqualsIgnoreCase(m_colorSwapchainFormat, "rgba")) {
+            CHECK_MSG(std::find(runtimeFormats.begin(), runtimeFormats.end(), VK_FORMAT_R8G8B8A8_UNORM) != runtimeFormats.end(),
+                      "Requested RGBA UNORM swapchain format is not advertised");
+            return VK_FORMAT_R8G8B8A8_UNORM;
+        }
+
         // List of supported color swapchain formats.
         constexpr int64_t SupportedColorSwapchainFormats[] = {VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R8G8B8A8_SRGB,
                                                               VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM};
@@ -1857,6 +1863,7 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     std::array<float, 4> m_clearColor;
     bool m_nativeLfDiagnostic{false};
     std::string m_nativeLfAtlasFormat;
+    std::string m_colorSwapchainFormat;
     bool m_nativeLfPatterns{true};
 
 #if defined(USE_MIRROR_WINDOW)

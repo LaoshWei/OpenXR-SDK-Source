@@ -62,6 +62,8 @@ struct Options {
 #endif
 
     std::string NativeLfAtlasFormat{"auto"};
+    std::string NativeLfTest{"normal"};
+    std::string ColorSwapchainFormat{"auto"};
 
     std::string FormFactor{"Hmd"};
 
@@ -80,6 +82,14 @@ struct Options {
     } Parsed;
 
     void ParseStrings() {
+        if (NativeLfDiagnostic && NativeLfTest != "normal" && NativeLfTest != "zero" && NativeLfTest != "clear" &&
+            NativeLfTest != "invalid" && NativeLfTest != "rotation" && NativeLfTest != "identity-pattern" &&
+            NativeLfTest != "srgb" && NativeLfTest != "mixed-srgb") {
+            throw std::invalid_argument("Unknown Native LF diagnostic test");
+        }
+        if (!EqualsIgnoreCase(ColorSwapchainFormat, "auto") && !EqualsIgnoreCase(ColorSwapchainFormat, "rgba")) {
+            throw std::invalid_argument("Color swapchain format must be auto or rgba");
+        }
         Parsed.FormFactor = GetXrFormFactor(FormFactor);
         Parsed.ViewConfigType = GetXrViewConfigurationType(ViewConfiguration);
         Parsed.EnvironmentBlendMode = GetXrEnvironmentBlendMode(EnvironmentBlendMode);

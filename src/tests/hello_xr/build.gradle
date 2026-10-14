@@ -48,6 +48,9 @@ android {
         Vulkan {
             res.srcDir 'android_resources/vulkan'
         }
+        NativeLf {
+            res.srcDir 'android_resources/vulkan'
+        }
         OpenGLES {
             res.srcDir 'android_resources/opengles'
         }
@@ -81,6 +84,13 @@ android {
             externalNativeBuild.cmake.arguments += '-DHELLOXR_DEFAULT_GRAPHICS_PLUGIN=Vulkan'
 
             resValue "string", "app_name", "Hello XR (Vulkan)"
+        }
+        NativeLf {
+            dimension 'api'
+            applicationIdSuffix '.native_lf'
+            externalNativeBuild.cmake.arguments += ['-DHELLOXR_DEFAULT_GRAPHICS_PLUGIN=Vulkan',
+                                                    '-DHELLOXR_NATIVE_LF_DIAGNOSTIC=ON']
+            resValue "string", "app_name", "Native LF Diagnostic"
         }
     }
 }
