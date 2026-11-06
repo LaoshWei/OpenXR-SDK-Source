@@ -1390,7 +1390,16 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
           m_nativeLfAtlasFormat(options->NativeLfAtlasFormat), m_colorSwapchainFormat(options->ColorSwapchainFormat) {
         m_graphicsBinding.type = GetGraphicsBindingType();
         const char* patterns = std::getenv("NATIVE_LF_XR_PATTERNS");
+#ifdef XR_USE_PLATFORM_ANDROID
+        char patternsProperty[PROP_VALUE_MAX] = {};
+        if (__system_property_get("debug.xr.lfPatterns", patternsProperty) != 0) {
+            patterns = patternsProperty;
+        }
+#endif
         m_nativeLfPatterns = patterns == nullptr || std::string(patterns) != "0";
+        if (m_nativeLfDiagnostic) {
+            Log::Write(Log::Level::Info, Fmt("Native LF patterns: %s", m_nativeLfPatterns ? "enabled" : "disabled"));
+        }
     };
 
     std::vector<std::string> GetInstanceExtensions() const override { return {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME}; }
