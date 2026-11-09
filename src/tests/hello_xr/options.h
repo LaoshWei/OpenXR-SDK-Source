@@ -55,6 +55,16 @@ inline const char* GetXrEnvironmentBlendModeStr(XrEnvironmentBlendMode environme
 struct Options {
     std::string GraphicsPlugin;
 
+#ifdef NATIVE_LF_XR_DIAGNOSTIC
+    static constexpr bool NativeLfDiagnostic = true;
+#else
+    static constexpr bool NativeLfDiagnostic = false;
+#endif
+
+    std::string NativeLfAtlasFormat{"auto"};
+    std::string NativeLfTest{"normal"};
+    std::string ColorSwapchainFormat{"auto"};
+
     std::string FormFactor{"Hmd"};
 
     std::string ViewConfiguration{"Stereo"};
@@ -72,9 +82,33 @@ struct Options {
     } Parsed;
 
     void ParseStrings() {
+        if (NativeLfDiagnostic && NativeLfTest != "normal" && NativeLfTest != "zero" && NativeLfTest != "clear" &&
+            NativeLfTest != "invalid" && NativeLfTest != "rotation" && NativeLfTest != "identity-pattern" &&
+            NativeLfTest != "srgb" && NativeLfTest != "mixed-srgb") {
+            throw std::invalid_argument("Unknown Native LF diagnostic test");
+        }
+        if (!EqualsIgnoreCase(ColorSwapchainFormat, "auto") && !EqualsIgnoreCase(ColorSwapchainFormat, "rgba")) {
+            throw std::invalid_argument("Color swapchain format must be auto or rgba");
+        }
         Parsed.FormFactor = GetXrFormFactor(FormFactor);
         Parsed.ViewConfigType = GetXrViewConfigurationType(ViewConfiguration);
         Parsed.EnvironmentBlendMode = GetXrEnvironmentBlendMode(EnvironmentBlendMode);
+
+        if (NativeLfDiagnostic && !EqualsIgnoreCase(NativeLfAtlasFormat, "auto") &&
+            !EqualsIgnoreCase(NativeLfAtlasFormat, "bgra") &&
+            !EqualsIgnoreCase(NativeLfAtlasFormat, "rgba")) {
+            throw std::invalid_argument("Native LF atlas format must be auto, bgra or rgba");
+        }
+        if (NativeLfDiagnostic && !EqualsIgnoreCase(GraphicsPlugin, "Vulkan") &&
+            !EqualsIgnoreCase(GraphicsPlugin, "Vulkan2")) {
+            throw std::invalid_argument("Native LF diagnostic requires the Vulkan graphics plugin");
+        }
+        if (NativeLfDiagnostic && Parsed.ViewConfigType != XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO) {
+            throw std::invalid_argument("Native LF diagnostic requires PRIMARY_STEREO");
+        }
+        if (NativeLfDiagnostic && Parsed.EnvironmentBlendMode != XR_ENVIRONMENT_BLEND_MODE_OPAQUE) {
+            throw std::invalid_argument("Native LF diagnostic requires opaque environment blend mode");
+        }
     }
 
     std::array<float, 4> GetBackgroundClearColor() const {

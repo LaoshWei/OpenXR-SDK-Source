@@ -53,6 +53,15 @@ bool UpdateOptionsFromSystemProperties(Options& options) {
     if (__system_property_get("debug.xr.blendMode", value) != 0) {
         options.EnvironmentBlendMode = value;
     }
+    if (__system_property_get("debug.xr.swapchainFormat", value) != 0) {
+        options.ColorSwapchainFormat = value;
+    }
+    if (Options::NativeLfDiagnostic && __system_property_get("debug.xr.atlasFormat", value) != 0) {
+        options.NativeLfAtlasFormat = value;
+    }
+    if (Options::NativeLfDiagnostic && __system_property_get("debug.xr.lfTest", value) != 0) {
+        options.NativeLfTest = value;
+    }
 
     try {
         options.ParseStrings();
@@ -69,6 +78,9 @@ void ShowHelp() {
     Log::Write(Log::Level::Info,
                "HelloXr --graphics|-g <Graphics API> [--formfactor|-ff <Form factor>] [--viewconfig|-vc <View config>] "
                "[--blendmode|-bm <Blend mode>] [--space|-s <Space>] [--verbose|-v]");
+    if (Options::NativeLfDiagnostic) {
+        Log::Write(Log::Level::Info, "Native LF: --atlas-format <auto|bgra|rgba> (default: auto)");
+    }
     Log::Write(Log::Level::Info, "Graphics APIs:            D3D11, D3D12, OpenGLES, OpenGL, Vulkan2, Vulkan, Metal");
     Log::Write(Log::Level::Info, "Form factors:             Hmd, Handheld");
     Log::Write(Log::Level::Info, "View configurations:      Mono, Stereo");
@@ -99,6 +111,10 @@ bool UpdateOptionsFromCommandLine(Options& options, int argc, char* argv[]) {
             options.EnvironmentBlendMode = getNextArg();
         } else if (EqualsIgnoreCase(arg, "--space") || EqualsIgnoreCase(arg, "-s")) {
             options.AppSpace = getNextArg();
+        } else if (EqualsIgnoreCase(arg, "--atlas-format") && Options::NativeLfDiagnostic) {
+            options.NativeLfAtlasFormat = getNextArg();
+        } else if (EqualsIgnoreCase(arg, "--lf-test") && Options::NativeLfDiagnostic) {
+            options.NativeLfTest = getNextArg();
         } else if (EqualsIgnoreCase(arg, "--verbose") || EqualsIgnoreCase(arg, "-v")) {
             Log::SetLevel(Log::Level::Verbose);
         } else if (EqualsIgnoreCase(arg, "--help") || EqualsIgnoreCase(arg, "-h")) {
@@ -215,70 +231,91 @@ void android_main(struct android_app* app) {
         bool requestRestart = false;
         bool exitRenderLoop = false;
 
-        // Create platform-specific implementation.
-        std::shared_ptr<IPlatformPlugin> platformPlugin = CreatePlatformPlugin(options, data);
-        // Create graphics API implementation.
-        std::shared_ptr<IGraphicsPlugin> graphicsPlugin = CreateGraphicsPlugin(options, platformPlugin);
+        do {
+            requestRestart = false;
+            exitRenderLoop = false;
+            if (Options::NativeLfDiagnostic) {
+                // Release the old instance on pause/window loss, then wait for a new usable surface.
+                while (app->destroyRequested == 0 && (!appState.Resumed || appState.NativeWindow == nullptr)) {
+                    struct android_poll_source* source = nullptr;
+                    int events;
+                    if (ALooper_pollAll(250, nullptr, &events, (void**)&source) >= 0 && source != nullptr) {
+                        source->process(app, source);
+                    }
+                }
+                if (app->destroyRequested != 0) { break; }
+            }
+            // Create platform-specific implementation.
+            std::shared_ptr<IPlatformPlugin> platformPlugin = CreatePlatformPlugin(options, data);
+            // Create graphics API implementation.
+            std::shared_ptr<IGraphicsPlugin> graphicsPlugin = CreateGraphicsPlugin(options, platformPlugin);
 
-        // Initialize the OpenXR program.
-        std::shared_ptr<IOpenXrProgram> program = CreateOpenXrProgram(options, platformPlugin, graphicsPlugin);
+            // Initialize the OpenXR program.
+            std::shared_ptr<IOpenXrProgram> program = CreateOpenXrProgram(options, platformPlugin, graphicsPlugin);
 
-        // Initialize the loader for this platform
-        PFN_xrInitializeLoaderKHR initializeLoader = nullptr;
-        if (XR_SUCCEEDED(
-                xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR", (PFN_xrVoidFunction*)(&initializeLoader)))) {
-            XrLoaderInitInfoAndroidKHR loaderInitInfoAndroid = {XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
-            loaderInitInfoAndroid.applicationVM = app->activity->vm;
-            loaderInitInfoAndroid.applicationContext = app->activity->clazz;
-            initializeLoader((const XrLoaderInitInfoBaseHeaderKHR*)&loaderInitInfoAndroid);
-        }
+            // Initialize the loader for this platform
+            PFN_xrInitializeLoaderKHR initializeLoader = nullptr;
+            if (XR_SUCCEEDED(
+                    xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR", (PFN_xrVoidFunction*)(&initializeLoader)))) {
+                XrLoaderInitInfoAndroidKHR loaderInitInfoAndroid = {XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR};
+                loaderInitInfoAndroid.applicationVM = app->activity->vm;
+                loaderInitInfoAndroid.applicationContext = app->activity->clazz;
+                initializeLoader((const XrLoaderInitInfoBaseHeaderKHR*)&loaderInitInfoAndroid);
+            }
 
-        program->CreateInstance();
-        program->InitializeSystem();
+            program->CreateInstance();
+            program->InitializeSystem();
 
-        options->SetEnvironmentBlendMode(program->GetPreferredBlendMode());
-        UpdateOptionsFromSystemProperties(*options);
-        platformPlugin->UpdateOptions(options);
-        graphicsPlugin->UpdateOptions(options);
+            options->SetEnvironmentBlendMode(program->GetPreferredBlendMode());
+            UpdateOptionsFromSystemProperties(*options);
+            platformPlugin->UpdateOptions(options);
+            graphicsPlugin->UpdateOptions(options);
 
-        program->InitializeDevice();
-        program->InitializeSession();
-        program->CreateSwapchains();
+            program->InitializeDevice();
+            program->InitializeSession();
+            program->CreateSwapchains();
 
-        while (app->destroyRequested == 0) {
-            // Read all pending events.
-            for (;;) {
-                int events;
-                struct android_poll_source* source;
-                // If the timeout is zero, returns immediately without blocking.
-                // If the timeout is negative, waits indefinitely until an event appears.
-                const int timeoutMilliseconds =
-                    (!appState.Resumed && !program->IsSessionRunning() && app->destroyRequested == 0) ? -1 : 0;
-                if (ALooper_pollAll(timeoutMilliseconds, nullptr, &events, (void**)&source) < 0) {
+            while (app->destroyRequested == 0) {
+                // Read all pending events.
+                for (;;) {
+                    int events;
+                    struct android_poll_source* source;
+                    // If the timeout is zero, returns immediately without blocking.
+                    // If the timeout is negative, waits indefinitely until an event appears.
+                    const int timeoutMilliseconds =
+                        (!appState.Resumed && !program->IsSessionRunning() && app->destroyRequested == 0) ? -1 : 0;
+                    if (ALooper_pollAll(timeoutMilliseconds, nullptr, &events, (void**)&source) < 0) {
+                        break;
+                    }
+
+                    // Process this event.
+                    if (source != nullptr) {
+                        source->process(app, source);
+                    }
+                }
+
+                if (Options::NativeLfDiagnostic && (!appState.Resumed || appState.NativeWindow == nullptr)) {
+                    Log::Write(Log::Level::Info, "Native LF lifecycle: releasing session and surface on pause/window loss");
+                    requestRestart = true;
                     break;
                 }
-
-                // Process this event.
-                if (source != nullptr) {
-                    source->process(app, source);
+                program->PollEvents(&exitRenderLoop, &requestRestart);
+                if (exitRenderLoop) {
+                    if (Options::NativeLfDiagnostic && requestRestart) { break; }
+                    ANativeActivity_finish(app->activity);
+                    continue;
                 }
-            }
 
-            program->PollEvents(&exitRenderLoop, &requestRestart);
-            if (exitRenderLoop) {
-                ANativeActivity_finish(app->activity);
-                continue;
-            }
+                if (!program->IsSessionRunning()) {
+                    // Throttle loop since xrWaitFrame won't be called.
+                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                    continue;
+                }
 
-            if (!program->IsSessionRunning()) {
-                // Throttle loop since xrWaitFrame won't be called.
-                std::this_thread::sleep_for(std::chrono::milliseconds(250));
-                continue;
+                program->PollActions();
+                program->RenderFrame();
             }
-
-            program->PollActions();
-            program->RenderFrame();
-        }
+        } while (Options::NativeLfDiagnostic && requestRestart && app->destroyRequested == 0);
 
         app->activity->vm->DetachCurrentThread();
     } catch (const std::exception& ex) {

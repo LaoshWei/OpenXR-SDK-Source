@@ -192,7 +192,7 @@ struct OpenXrProgram : IOpenXrProgram {
         createInfo.enabledExtensionCount = (uint32_t)extensions.size();
         createInfo.enabledExtensionNames = extensions.data();
 
-        strcpy(createInfo.applicationInfo.applicationName, "HelloXR");
+        strcpy(createInfo.applicationInfo.applicationName, m_options->NativeLfDiagnostic ? "NativeLfXR" : "HelloXR");
 
         // Current version is 1.1.x, but hello_xr only requires 1.0.x
         createInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
@@ -533,6 +533,10 @@ struct OpenXrProgram : IOpenXrProgram {
     void CreateVisualizedSpaces() {
         CHECK(m_session != XR_NULL_HANDLE);
 
+        if (m_options->NativeLfDiagnostic) {
+            return;
+        }
+
         std::string visualizedSpaces[] = {"ViewFront",        "Local", "Stage", "StageLeft", "StageRight", "StageLeftRotated",
                                           "StageRightRotated"};
 
@@ -605,6 +609,10 @@ struct OpenXrProgram : IOpenXrProgram {
         m_configViews.resize(viewCount, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
         CHECK_XRCMD(xrEnumerateViewConfigurationViews(m_instance, m_systemId, m_options->Parsed.ViewConfigType, viewCount,
                                                       &viewCount, m_configViews.data()));
+        if (m_options->NativeLfDiagnostic) {
+            CHECK_MSG(viewCount == 2, Fmt("Native LF diagnostic requires exactly two PRIMARY_STEREO views; runtime returned %u",
+                                         viewCount));
+        }
 
         // Create and cache view buffer for xrLocateViews later.
         m_views.resize(viewCount, {XR_TYPE_VIEW});
@@ -619,6 +627,14 @@ struct OpenXrProgram : IOpenXrProgram {
                                                     swapchainFormats.data()));
             CHECK(swapchainFormatCount == swapchainFormats.size());
             m_colorSwapchainFormat = m_graphicsPlugin->SelectColorSwapchainFormat(swapchainFormats);
+            Log::Write(Log::Level::Info, Fmt("Swapchain selected: format=%lld", static_cast<long long>(m_colorSwapchainFormat)));
+#ifdef XR_USE_GRAPHICS_API_VULKAN
+            if (m_options->NativeLfDiagnostic) {
+                Log::Write(Log::Level::Info,
+                           Fmt("Native LF atlas selected: format=VK_FORMAT_%s_UNORM output=VK_FORMAT_B8G8R8A8_UNORM",
+                               m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_UNORM ? "R8G8B8A8" : "B8G8R8A8"));
+            }
+#endif
 
             // Print swapchain formats and the selected one.
             {
@@ -637,39 +653,84 @@ struct OpenXrProgram : IOpenXrProgram {
                 Log::Write(Log::Level::Verbose, Fmt("Swapchain Formats: %s", swapchainFormatsString.c_str()));
             }
 
-            // Create a swapchain for each view.
-            for (uint32_t i = 0; i < viewCount; i++) {
-                const XrViewConfigurationView& vp = m_configViews[i];
-                Log::Write(Log::Level::Info,
-                           Fmt("Creating swapchain for view %d with dimensions Width=%d Height=%d SampleCount=%d", i,
-                               vp.recommendedImageRectWidth, vp.recommendedImageRectHeight, vp.recommendedSwapchainSampleCount));
+            // Keep the selected format for this session; report the failing stage without trying another format.
+            const char* nativeLfStage = "xrCreateSwapchain";
+            try {
+                // Create a swapchain for each view.
+                for (uint32_t i = 0; i < viewCount; i++) {
+                    const XrViewConfigurationView& vp = m_configViews[i];
+                    Log::Write(Log::Level::Info,
+                               Fmt("Creating swapchain for view %d with dimensions Width=%d Height=%d SampleCount=%d", i,
+                                   vp.recommendedImageRectWidth, vp.recommendedImageRectHeight, vp.recommendedSwapchainSampleCount));
 
-                // Create the swapchain.
-                XrSwapchainCreateInfo swapchainCreateInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-                swapchainCreateInfo.arraySize = 1;
-                swapchainCreateInfo.format = m_colorSwapchainFormat;
-                swapchainCreateInfo.width = vp.recommendedImageRectWidth;
-                swapchainCreateInfo.height = vp.recommendedImageRectHeight;
-                swapchainCreateInfo.mipCount = 1;
-                swapchainCreateInfo.faceCount = 1;
-                swapchainCreateInfo.sampleCount = m_graphicsPlugin->GetSupportedSwapchainSampleCount(vp);
-                swapchainCreateInfo.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
-                Swapchain swapchain;
-                swapchain.width = swapchainCreateInfo.width;
-                swapchain.height = swapchainCreateInfo.height;
-                CHECK_XRCMD(xrCreateSwapchain(m_session, &swapchainCreateInfo, &swapchain.handle));
+                    if (m_options->NativeLfDiagnostic) {
+                        nativeLfStage = "validate view extent";
+                        CHECK_MSG(vp.recommendedImageRectWidth == 1920 && vp.recommendedImageRectHeight == 1080,
+                                  Fmt("Native LF diagnostic requires 1920x1080 recommended extent for view %u; runtime returned %ux%u",
+                                      i, vp.recommendedImageRectWidth, vp.recommendedImageRectHeight));
+                    }
 
-                m_swapchains.push_back(swapchain);
+                    // Create the swapchain.
+                    XrSwapchainCreateInfo swapchainCreateInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+                    swapchainCreateInfo.arraySize = 1;
+                    swapchainCreateInfo.format = m_colorSwapchainFormat;
+#ifdef XR_USE_GRAPHICS_API_VULKAN
+                    if (m_options->NativeLfDiagnostic &&
+                        (m_options->NativeLfTest == "srgb" || (m_options->NativeLfTest == "mixed-srgb" && i == 1))) {
+                        CHECK_MSG(std::find(swapchainFormats.begin(), swapchainFormats.end(), VK_FORMAT_R8G8B8A8_SRGB) !=
+                                      swapchainFormats.end(), "Diagnostic sRGB swapchain is not advertised");
+                        swapchainCreateInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
+                    }
+#endif
+                    swapchainCreateInfo.width = vp.recommendedImageRectWidth;
+                    swapchainCreateInfo.height = vp.recommendedImageRectHeight;
+                    swapchainCreateInfo.mipCount = 1;
+                    swapchainCreateInfo.faceCount = 1;
+                    swapchainCreateInfo.sampleCount =
+                        m_options->NativeLfDiagnostic ? 1 : m_graphicsPlugin->GetSupportedSwapchainSampleCount(vp);
+                    swapchainCreateInfo.usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+                    Swapchain swapchain;
+                    swapchain.width = swapchainCreateInfo.width;
+                    swapchain.height = swapchainCreateInfo.height;
+                    nativeLfStage = "xrCreateSwapchain";
+                    if (m_options->NativeLfDiagnostic) {
+                        Log::Write(Log::Level::Info, Fmt("Native LF view=%u actual swapchain format=%lld", i,
+                                                        static_cast<long long>(swapchainCreateInfo.format)));
+                    }
+                    CHECK_XRCMD(xrCreateSwapchain(m_session, &swapchainCreateInfo, &swapchain.handle));
 
-                uint32_t imageCount;
-                CHECK_XRCMD(xrEnumerateSwapchainImages(swapchain.handle, 0, &imageCount, nullptr));
-                // XXX This should really just return XrSwapchainImageBaseHeader*
-                std::vector<XrSwapchainImageBaseHeader*> swapchainImages =
-                    m_graphicsPlugin->AllocateSwapchainImageStructs(imageCount, swapchainCreateInfo);
-                CHECK_XRCMD(xrEnumerateSwapchainImages(swapchain.handle, imageCount, &imageCount, swapchainImages[0]));
+                    m_swapchains.push_back(swapchain);
 
-                m_swapchainImages.insert(std::make_pair(swapchain.handle, std::move(swapchainImages)));
+                    uint32_t imageCount;
+                    nativeLfStage = "xrEnumerateSwapchainImages";
+                    CHECK_XRCMD(xrEnumerateSwapchainImages(swapchain.handle, 0, &imageCount, nullptr));
+                    // XXX This should really just return XrSwapchainImageBaseHeader*
+                    nativeLfStage = "AllocateSwapchainImageStructs";
+                    std::vector<XrSwapchainImageBaseHeader*> swapchainImages =
+                        m_graphicsPlugin->AllocateSwapchainImageStructs(imageCount, swapchainCreateInfo);
+                    nativeLfStage = "xrEnumerateSwapchainImages";
+                    CHECK_XRCMD(xrEnumerateSwapchainImages(swapchain.handle, imageCount, &imageCount, swapchainImages[0]));
+
+                    m_swapchainImages.insert(std::make_pair(swapchain.handle, std::move(swapchainImages)));
+                }
+            } catch (const std::exception& error) {
+                if (m_options->NativeLfDiagnostic) {
+                    Log::Write(Log::Level::Error,
+                               Fmt("Native LF atlas failure: format=%lld stage=%s error=%s",
+                                   static_cast<long long>(m_colorSwapchainFormat), nativeLfStage, error.what()));
+                }
+                throw;
             }
+
+#ifdef XR_USE_GRAPHICS_API_VULKAN
+            if (m_options->NativeLfDiagnostic && m_options->NativeLfTest != "srgb" &&
+                m_options->NativeLfTest != "mixed-srgb") {
+                Log::Write(Log::Level::Info,
+                           Fmt("Native LF diagnostic contract: views=2 extent=1920x1080 "
+                           "format=VK_FORMAT_%s_UNORM array_size=1 image_array_index=0 sample_count=1",
+                           m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_UNORM ? "R8G8B8A8" : "B8G8R8A8"));
+            }
+#endif
         }
     }
 
@@ -863,30 +924,99 @@ struct OpenXrProgram : IOpenXrProgram {
     }
 
     void RenderFrame() override {
-        CHECK(m_session != XR_NULL_HANDLE);
+        try {
+            CHECK(m_session != XR_NULL_HANDLE);
 
-        XrFrameWaitInfo frameWaitInfo{XR_TYPE_FRAME_WAIT_INFO};
-        XrFrameState frameState{XR_TYPE_FRAME_STATE};
-        CHECK_XRCMD(xrWaitFrame(m_session, &frameWaitInfo, &frameState));
+            m_nativeLfFrameStage = "xrWaitFrame";
+            XrFrameWaitInfo frameWaitInfo{XR_TYPE_FRAME_WAIT_INFO};
+            XrFrameState frameState{XR_TYPE_FRAME_STATE};
+            CHECK_XRCMD(xrWaitFrame(m_session, &frameWaitInfo, &frameState));
 
-        XrFrameBeginInfo frameBeginInfo{XR_TYPE_FRAME_BEGIN_INFO};
-        CHECK_XRCMD(xrBeginFrame(m_session, &frameBeginInfo));
+            m_nativeLfFrameStage = "xrBeginFrame";
+            XrFrameBeginInfo frameBeginInfo{XR_TYPE_FRAME_BEGIN_INFO};
+            CHECK_XRCMD(xrBeginFrame(m_session, &frameBeginInfo));
 
-        std::vector<XrCompositionLayerBaseHeader*> layers;
-        XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-        std::vector<XrCompositionLayerProjectionView> projectionLayerViews;
-        if (frameState.shouldRender == XR_TRUE) {
-            if (RenderLayer(frameState.predictedDisplayTime, projectionLayerViews, layer)) {
-                layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&layer));
+            std::vector<XrCompositionLayerBaseHeader*> layers;
+            XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+            std::vector<XrCompositionLayerProjectionView> projectionLayerViews;
+            const bool diagnostic = m_options->NativeLfDiagnostic;
+            const std::string& test = m_options->NativeLfTest;
+            bool clearRequested = false;
+#ifdef XR_USE_PLATFORM_ANDROID
+            if (diagnostic && test == "clear") {
+                char value[PROP_VALUE_MAX] = {};
+                clearRequested = __system_property_get("debug.xr.lfZero", value) != 0 && std::string(value) == "1";
             }
-        }
+#endif
+            const bool zero = diagnostic && (test == "zero" || (test == "clear" && clearRequested));
+            if (diagnostic && zero && test == "clear" && !m_nativeLfClearLogged) {
+                Log::Write(Log::Level::Info, Fmt("Native LF diagnostic: clearing after %llu submitted projection frames",
+                                                static_cast<unsigned long long>(m_nativeLfFrameCount)));
+                m_nativeLfClearLogged = true;
+            }
+            if (frameState.shouldRender == XR_TRUE && !zero) {
+                m_nativeLfFrameStage = "RenderLayer";
+                if (RenderLayer(frameState.predictedDisplayTime, projectionLayerViews, layer)) {
+                    layers.push_back(reinterpret_cast<XrCompositionLayerBaseHeader*>(&layer));
+                }
+            }
 
-        XrFrameEndInfo frameEndInfo{XR_TYPE_FRAME_END_INFO};
-        frameEndInfo.displayTime = frameState.predictedDisplayTime;
-        frameEndInfo.environmentBlendMode = m_options->Parsed.EnvironmentBlendMode;
-        frameEndInfo.layerCount = (uint32_t)layers.size();
-        frameEndInfo.layers = layers.data();
-        CHECK_XRCMD(xrEndFrame(m_session, &frameEndInfo));
+            XrFrameEndInfo frameEndInfo{XR_TYPE_FRAME_END_INFO};
+            frameEndInfo.displayTime = frameState.predictedDisplayTime;
+            frameEndInfo.environmentBlendMode = m_options->Parsed.EnvironmentBlendMode;
+            frameEndInfo.layerCount = (uint32_t)layers.size();
+            frameEndInfo.layers = layers.data();
+            m_nativeLfFrameStage = "xrEndFrame";
+            if (diagnostic && !layers.empty() && test == "rotation") {
+                // Deliberately submit render anchors yawed from stationary latest poses.
+                // The atlas pattern is unchanged, so capture observes compensation itself.
+                for (auto& view : projectionLayerViews) {
+                    const XrQuaternionf yaw{0.0f, std::sin(0.0261799388f), 0.0f, std::cos(0.0261799388f)};
+                    XrQuaternionf_Multiply(&view.pose.orientation, &yaw, &view.pose.orientation);
+                }
+                if (!m_nativeLfRotationLogged) {
+                    Log::Write(Log::Level::Info, "Native LF diagnostic rotation: submitted yaw=3deg relative to located eyes");
+                    m_nativeLfRotationLogged = true;
+                }
+            }
+            if (diagnostic && !layers.empty() && test == "invalid" && m_nativeLfInvalidCount < 3) {
+                const char* reason = "partial-rect";
+                std::vector<XrCompositionLayerBaseHeader*> invalidLayers = layers;
+                if (m_nativeLfInvalidCount == 0) {
+                    projectionLayerViews[0].subImage.imageRect.extent.width--;
+                } else if (m_nativeLfInvalidCount == 1) {
+                    reason = "array-index";
+                    projectionLayerViews[0].subImage.imageArrayIndex = 1;
+                } else {
+                    reason = "extra-layer";
+                    invalidLayers.push_back(layers[0]);
+                    frameEndInfo.layerCount = (uint32_t)invalidLayers.size();
+                    frameEndInfo.layers = invalidLayers.data();
+                }
+                const XrResult rejected = xrEndFrame(m_session, &frameEndInfo);
+                Log::Write(Log::Level::Info, Fmt("Native LF invalid submission: case=%s result=%d", reason, rejected));
+                CHECK_MSG(rejected == XR_ERROR_LAYER_INVALID || rejected == XR_ERROR_VALIDATION_FAILURE,
+                          "Invalid Native LF diagnostic submission was not synchronously rejected");
+                ++m_nativeLfInvalidCount;
+                return;
+            }
+            if (diagnostic && !layers.empty() && (test == "srgb" || test == "mixed-srgb")) {
+                const XrResult rejected = xrEndFrame(m_session, &frameEndInfo);
+                Log::Write(Log::Level::Info, Fmt("Native LF invalid submission: case=%s result=%d", test.c_str(), rejected));
+                CHECK_MSG(rejected == XR_ERROR_LAYER_INVALID, "Unsupported atlas format was not synchronously rejected");
+                ++m_nativeLfFrameCount;
+                return;
+            }
+            CHECK_XRCMD(xrEndFrame(m_session, &frameEndInfo));
+            if (!layers.empty()) { ++m_nativeLfFrameCount; }
+        } catch (const std::exception& error) {
+            if (m_options->NativeLfDiagnostic) {
+                Log::Write(Log::Level::Error,
+                           Fmt("Native LF atlas failure: format=%lld stage=%s error=%s",
+                               static_cast<long long>(m_colorSwapchainFormat), m_nativeLfFrameStage, error.what()));
+            }
+            throw;
+        }
     }
 
     bool RenderLayer(XrTime predictedDisplayTime, std::vector<XrCompositionLayerProjectionView>& projectionLayerViews,
@@ -902,6 +1032,7 @@ struct OpenXrProgram : IOpenXrProgram {
         viewLocateInfo.displayTime = predictedDisplayTime;
         viewLocateInfo.space = m_appSpace;
 
+        m_nativeLfFrameStage = "xrLocateViews";
         res = xrLocateViews(m_session, &viewLocateInfo, &viewState, viewCapacityInput, &viewCountOutput, m_views.data());
         CHECK_XRRESULT(res, "xrLocateViews");
         if ((viewState.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) == 0 ||
@@ -918,8 +1049,38 @@ struct OpenXrProgram : IOpenXrProgram {
         // For each locatable space that we want to visualize, render a 25cm cube.
         std::vector<Cube> cubes;
 
+        if (m_options->NativeLfDiagnostic) {
+            if (m_nativeLfWorldCubes.empty()) {
+                // Freeze the initial head pose in app space (LOCAL by default). Subsequent
+                // tracking updates move the cameras, never these world-space objects.
+                XrPosef initialHeadPose = m_views[0].pose;
+                initialHeadPose.position = {
+                    (m_views[0].pose.position.x + m_views[1].pose.position.x) * 0.5f,
+                    (m_views[0].pose.position.y + m_views[1].pose.position.y) * 0.5f,
+                    (m_views[0].pose.position.z + m_views[1].pose.position.z) * 0.5f};
+                const std::array<Cube, 3> scene = {{
+                    {Math::Pose::Translation({-0.18f, -0.06f, -2.0f}), {0.16f, 0.16f, 0.16f}},
+                    {Math::Pose::Translation({0.24f, 0.08f, -3.5f}), {0.24f, 0.24f, 0.24f}},
+                    {Math::Pose::Translation({0.0f, 0.0f, -5.0f}), {0.32f, 0.32f, 0.32f}},
+                }};
+                for (const Cube& cube : scene) {
+                    XrPosef worldPose;
+                    XrPosef_Multiply(&worldPose, &initialHeadPose, &cube.Pose);
+                    m_nativeLfWorldCubes.push_back(Cube{worldPose, cube.Scale});
+                }
+                Log::Write(Log::Level::Info,
+                           "Native LF world scene: three fixed cubes at initial depths 2m, 3.5m, 5m; no ViewFront or hand cubes");
+            }
+            cubes = m_nativeLfWorldCubes;
+            if (m_options->NativeLfTest == "rotation" || m_options->NativeLfTest == "identity-pattern") {
+                // Reference compensation captures isolate the diagnostic pattern from device-specific scene parallax.
+                cubes.clear();
+            }
+        }
+
         for (XrSpace visualizedSpace : m_visualizedSpaces) {
             XrSpaceLocation spaceLocation{XR_TYPE_SPACE_LOCATION};
+            m_nativeLfFrameStage = "xrLocateSpace";
             res = xrLocateSpace(visualizedSpace, m_appSpace, predictedDisplayTime, &spaceLocation);
             CHECK_XRRESULT(res, "xrLocateSpace");
             if (XR_UNQUALIFIED_SUCCESS(res)) {
@@ -935,7 +1096,11 @@ struct OpenXrProgram : IOpenXrProgram {
         // Render a 10cm cube scaled by grabAction for each hand. Note renderHand will only be
         // true when the application has focus.
         for (auto hand : {Side::LEFT, Side::RIGHT}) {
+            if (m_options->NativeLfDiagnostic) {
+                continue;
+            }
             XrSpaceLocation spaceLocation{XR_TYPE_SPACE_LOCATION};
+            m_nativeLfFrameStage = "xrLocateSpace";
             res = xrLocateSpace(m_input.handSpace[hand], m_appSpace, predictedDisplayTime, &spaceLocation);
             CHECK_XRRESULT(res, "xrLocateSpace");
             if (XR_UNQUALIFIED_SUCCESS(res)) {
@@ -963,10 +1128,12 @@ struct OpenXrProgram : IOpenXrProgram {
             XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
 
             uint32_t swapchainImageIndex;
+            m_nativeLfFrameStage = "xrAcquireSwapchainImage";
             CHECK_XRCMD(xrAcquireSwapchainImage(viewSwapchain.handle, &acquireInfo, &swapchainImageIndex));
 
             XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
             waitInfo.timeout = XR_INFINITE_DURATION;
+            m_nativeLfFrameStage = "xrWaitSwapchainImage";
             CHECK_XRCMD(xrWaitSwapchainImage(viewSwapchain.handle, &waitInfo));
 
             projectionLayerViews[i] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
@@ -975,11 +1142,14 @@ struct OpenXrProgram : IOpenXrProgram {
             projectionLayerViews[i].subImage.swapchain = viewSwapchain.handle;
             projectionLayerViews[i].subImage.imageRect.offset = {0, 0};
             projectionLayerViews[i].subImage.imageRect.extent = {viewSwapchain.width, viewSwapchain.height};
+            projectionLayerViews[i].subImage.imageArrayIndex = 0;
 
             const XrSwapchainImageBaseHeader* const swapchainImage = m_swapchainImages[viewSwapchain.handle][swapchainImageIndex];
+            m_nativeLfFrameStage = "RenderView";
             m_graphicsPlugin->RenderView(projectionLayerViews[i], swapchainImage, m_colorSwapchainFormat, cubes);
 
             XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+            m_nativeLfFrameStage = "xrReleaseSwapchainImage";
             CHECK_XRCMD(xrReleaseSwapchainImage(viewSwapchain.handle, &releaseInfo));
         }
 
@@ -1000,6 +1170,7 @@ struct OpenXrProgram : IOpenXrProgram {
     XrInstance m_instance{XR_NULL_HANDLE};
     XrSession m_session{XR_NULL_HANDLE};
     XrSpace m_appSpace{XR_NULL_HANDLE};
+    std::vector<Cube> m_nativeLfWorldCubes;
     XrSystemId m_systemId{XR_NULL_SYSTEM_ID};
 
     std::vector<XrViewConfigurationView> m_configViews;
@@ -1007,6 +1178,11 @@ struct OpenXrProgram : IOpenXrProgram {
     std::map<XrSwapchain, std::vector<XrSwapchainImageBaseHeader*>> m_swapchainImages;
     std::vector<XrView> m_views;
     int64_t m_colorSwapchainFormat{-1};
+    const char* m_nativeLfFrameStage{"RenderFrame"};
+    uint64_t m_nativeLfFrameCount{0};
+    uint32_t m_nativeLfInvalidCount{0};
+    bool m_nativeLfClearLogged{false};
+    bool m_nativeLfRotationLogged{false};
 
     std::vector<XrSpace> m_visualizedSpaces;
 

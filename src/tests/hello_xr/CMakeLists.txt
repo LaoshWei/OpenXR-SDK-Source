@@ -50,6 +50,7 @@ set(LOCAL_SOURCE
 set(VULKAN_SHADERS vulkan_shaders/frag.glsl vulkan_shaders/vert.glsl)
 
 if(ANDROID)
+    option(HELLOXR_NATIVE_LF_DIAGNOSTIC "Build the separate Android Native LF diagnostic flavor" OFF)
     add_library(
         hello_xr MODULE
         ${LOCAL_SOURCE}
@@ -60,6 +61,9 @@ if(ANDROID)
     target_link_libraries(
         hello_xr PRIVATE ${ANDROID_LIBRARY} ${ANDROID_LOG_LIBRARY}
     )
+    if(HELLOXR_NATIVE_LF_DIAGNOSTIC)
+        target_compile_definitions(hello_xr PRIVATE NATIVE_LF_XR_DIAGNOSTIC)
+    endif()
 
     # Only for Android because it lacks a command line
     set(HELLOXR_DEFAULT_GRAPHICS_PLUGIN
@@ -89,81 +93,88 @@ if(ANDROID)
 
 else()
     add_executable(hello_xr ${LOCAL_SOURCE} ${LOCAL_HEADERS} ${VULKAN_SHADERS})
-endif()
-
-if(APPLE)
-    # use C++17 since there is a dependency on metal-cpp
-    target_compile_features(hello_xr PUBLIC cxx_std_17)
-endif()
-
-set_target_properties(hello_xr PROPERTIES FOLDER ${SAMPLES_FOLDER})
-source_group("Headers" FILES ${LOCAL_HEADERS})
-source_group("Shaders" FILES ${VULKAN_SHADERS})
-
-target_link_libraries(hello_xr PRIVATE OpenXR::openxr_loader)
-
-compile_glsl(run_hello_xr_glsl_compiles ${VULKAN_SHADERS})
-
-add_dependencies(hello_xr run_hello_xr_glsl_compiles)
-
-target_include_directories(
-    hello_xr
-    PRIVATE
-        "${PROJECT_SOURCE_DIR}/src"
-        "${PROJECT_SOURCE_DIR}/src/common"
-        "${PROJECT_SOURCE_DIR}/src/external/metal-cpp"
-        "${PROJECT_SOURCE_DIR}/src/tests/hello_xr/vulkan_shaders"
-        # for helper headers
-        "${PROJECT_SOURCE_DIR}/external/include"
-        # For including compiled shaders
-        "${CMAKE_CURRENT_BINARY_DIR}"
-)
-
-target_link_libraries(hello_xr PRIVATE OpenXR::openxr_loader)
-
-if(GLSLANG_VALIDATOR AND NOT GLSLC_COMMAND)
-    target_compile_definitions(hello_xr PRIVATE USE_GLSLANGVALIDATOR)
-endif()
-
-if(XR_USE_GRAPHICS_API_VULKAN)
-    target_include_directories(hello_xr PRIVATE ${Vulkan_INCLUDE_DIRS})
-    target_link_libraries(hello_xr PRIVATE ${Vulkan_LIBRARY})
-endif()
-
-if(TARGET openxr-gfxwrapper)
-    target_link_libraries(hello_xr PRIVATE openxr-gfxwrapper)
-endif()
-if(WIN32)
-    target_link_libraries(hello_xr PRIVATE ole32)
-    if(MSVC)
-        target_compile_definitions(hello_xr PRIVATE _CRT_SECURE_NO_WARNINGS)
-        target_compile_options(hello_xr PRIVATE /Zc:wchar_t /Zc:forScope /W4)
-        if(NOT
-           CMAKE_CXX_COMPILER_ID
-           STREQUAL
-           "Clang"
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND XR_USE_GRAPHICS_API_VULKAN)
+        add_executable(
+            native_lf_xr ${LOCAL_SOURCE} ${LOCAL_HEADERS} ${VULKAN_SHADERS}
         )
-            # If actually msvc and not clang-cl
-            target_compile_options(openxr_c_compile_test PRIVATE /WX)
-        endif()
-
-        # Right now can't build d3d features on MinGW because of directxcolors, directxmath, etc.
-        target_link_libraries(
-            hello_xr
-            PRIVATE
-                d3d11
-                d3d12
-                d3dcompiler
-                dxgi
+        target_compile_definitions(
+            native_lf_xr PRIVATE NATIVE_LF_XR_DIAGNOSTIC
         )
     endif()
 endif()
 
-if(APPLE)
-    target_link_libraries(
-        hello_xr PRIVATE "-framework Foundation" "-framework CoreGraphics"
-                         "-framework Metal"
+source_group("Headers" FILES ${LOCAL_HEADERS})
+source_group("Shaders" FILES ${VULKAN_SHADERS})
+
+compile_glsl(run_hello_xr_glsl_compiles ${VULKAN_SHADERS})
+
+function(configure_hello_xr_target target_name)
+    set_target_properties(${target_name} PROPERTIES FOLDER ${SAMPLES_FOLDER})
+    add_dependencies(${target_name} run_hello_xr_glsl_compiles)
+    target_include_directories(
+        ${target_name}
+        PRIVATE
+            "${PROJECT_SOURCE_DIR}/src"
+            "${PROJECT_SOURCE_DIR}/src/common"
+            "${PROJECT_SOURCE_DIR}/src/external/metal-cpp"
+            "${PROJECT_SOURCE_DIR}/src/tests/hello_xr/vulkan_shaders"
+            # for helper headers
+            "${PROJECT_SOURCE_DIR}/external/include"
+            # For including compiled shaders
+            "${CMAKE_CURRENT_BINARY_DIR}"
     )
+    target_link_libraries(${target_name} PRIVATE OpenXR::openxr_loader)
+
+    if(APPLE)
+        # use C++17 since there is a dependency on metal-cpp
+        target_compile_features(${target_name} PUBLIC cxx_std_17)
+    endif()
+    if(GLSLANG_VALIDATOR AND NOT GLSLC_COMMAND)
+        target_compile_definitions(${target_name} PRIVATE USE_GLSLANGVALIDATOR)
+    endif()
+    if(XR_USE_GRAPHICS_API_VULKAN)
+        target_include_directories(${target_name} PRIVATE ${Vulkan_INCLUDE_DIRS})
+        target_link_libraries(${target_name} PRIVATE ${Vulkan_LIBRARY})
+    endif()
+    if(TARGET openxr-gfxwrapper)
+        target_link_libraries(${target_name} PRIVATE openxr-gfxwrapper)
+    endif()
+    if(WIN32)
+        target_link_libraries(${target_name} PRIVATE ole32)
+        if(MSVC)
+            target_compile_definitions(${target_name} PRIVATE _CRT_SECURE_NO_WARNINGS)
+            target_compile_options(${target_name} PRIVATE /Zc:wchar_t /Zc:forScope /W4)
+            if(NOT
+                CMAKE_CXX_COMPILER_ID
+                STREQUAL
+                "Clang"
+            )
+                # If actually msvc and not clang-cl
+                target_compile_options(openxr_c_compile_test PRIVATE /WX)
+            endif()
+
+            # Right now can't build d3d features on MinGW because of directxcolors, directxmath, etc.
+            target_link_libraries(
+                ${target_name}
+                PRIVATE
+                    d3d11
+                    d3d12
+                    d3dcompiler
+                    dxgi
+            )
+        endif()
+    endif()
+    if(APPLE)
+        target_link_libraries(
+            ${target_name} PRIVATE "-framework Foundation" "-framework CoreGraphics"
+                                   "-framework Metal"
+        )
+    endif()
+endfunction()
+
+configure_hello_xr_target(hello_xr)
+if(TARGET native_lf_xr)
+    configure_hello_xr_target(native_lf_xr)
 endif()
 
 if(NOT ANDROID)
