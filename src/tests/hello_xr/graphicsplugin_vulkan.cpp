@@ -45,11 +45,18 @@ constexpr std::array<std::array<float, 4>, 8> NativeLfViewColors = {
     std::array<float, 4>{1.0f, 0.0f, 1.0f, 1.0f}, std::array<float, 4>{0.0f, 1.0f, 1.0f, 1.0f},
     std::array<float, 4>{1.0f, 0.5f, 0.0f, 1.0f}, std::array<float, 4>{0.5f, 0.0f, 1.0f, 1.0f}};
 
-void ClearNativeLfRect(VkCommandBuffer commandBuffer, VkRect2D rect, const std::array<float, 4>& color) {
+void ClearNativeLfRect(VkCommandBuffer commandBuffer, VkRect2D rect, const std::array<float, 4>& color, bool encodedSrgb = false) {
     VkClearAttachment attachment{};
     attachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     attachment.colorAttachment = 0;
     std::copy(color.begin(), color.end(), attachment.clearValue.color.float32);
+    if (encodedSrgb) {
+        for (uint32_t i = 0; i < 3; ++i) {
+            const float value = color[i];
+            attachment.clearValue.color.float32[i] = value <= 0.04045f ? value / 12.92f
+                : std::pow((value + 0.055f) / 1.055f, 2.4f);
+        }
+    }
     const VkClearRect clearRect{rect, 0, 1};
     vkCmdClearAttachments(commandBuffer, 1, &attachment, 1, &clearRect);
 }
@@ -59,13 +66,16 @@ VkRect2D NativeLfLocalRect(uint32_t viewIndex, int32_t x, int32_t y, uint32_t wi
     return {{origin.x + x, origin.y + y}, {width, height}};
 }
 
-void ClearNativeLfView(VkCommandBuffer commandBuffer, uint32_t eyeIndex, uint32_t viewIndex) {
+void ClearNativeLfView(VkCommandBuffer commandBuffer, uint32_t eyeIndex, uint32_t viewIndex, bool srgb) {
     const uint32_t sourceIndex = eyeIndex * 4 + viewIndex;
     const std::array<float, 4>& background = NativeLfViewColors.at(sourceIndex);
-    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 0, 0, NativeLfViewWidth, NativeLfViewHeight), background);
+    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 0, 0, NativeLfViewWidth, NativeLfViewHeight), background, srgb);
 }
 
-void RecordNativeLfPattern(VkCommandBuffer commandBuffer, uint32_t eyeIndex, uint32_t viewIndex) {
+void RecordNativeLfPattern(VkCommandBuffer commandBuffer, uint32_t eyeIndex, uint32_t viewIndex, bool srgb) {
+    const auto clearRect = [&](VkRect2D rect, const std::array<float, 4>& color) {
+        ClearNativeLfRect(commandBuffer, rect, color, srgb);
+    };
     const uint32_t sourceIndex = eyeIndex * 4 + viewIndex;
     const std::array<float, 4> white = {1.0f, 1.0f, 1.0f, 1.0f};
     const std::array<float, 4> black = {0.0f, 0.0f, 0.0f, 1.0f};
@@ -79,43 +89,43 @@ void RecordNativeLfPattern(VkCommandBuffer commandBuffer, uint32_t eyeIndex, uin
         const int32_t y = static_cast<int32_t>((NativeLfViewHeight - 32) * step / GradientSteps);
         const uint32_t nextX = (NativeLfViewWidth - 32) * (step + 1) / GradientSteps;
         const uint32_t nextY = (NativeLfViewHeight - 32) * (step + 1) / GradientSteps;
-        ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, x, NativeLfViewHeight - 24, nextX - x, 23), gradient);
-        ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, NativeLfViewWidth - 24, y, 23, nextY - y), gradient);
+        clearRect(NativeLfLocalRect(viewIndex, x, NativeLfViewHeight - 24, nextX - x, 23), gradient);
+        clearRect(NativeLfLocalRect(viewIndex, NativeLfViewWidth - 24, y, 23, nextY - y), gradient);
     }
 
     // A unique direction arrow per atlas slot: up, right, down and left.
     switch (viewIndex) {
         case 0:
-            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 434, 205, 6, 80), black);
-            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 420, 205, 34, 8), black);
+            clearRect(NativeLfLocalRect(viewIndex, 434, 205, 6, 80), black);
+            clearRect(NativeLfLocalRect(viewIndex, 420, 205, 34, 8), black);
             break;
         case 1:
-            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 397, 247, 80, 6), black);
-            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 469, 233, 8, 34), black);
+            clearRect(NativeLfLocalRect(viewIndex, 397, 247, 80, 6), black);
+            clearRect(NativeLfLocalRect(viewIndex, 469, 233, 8, 34), black);
             break;
         case 2:
-            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 434, 215, 6, 80), black);
-            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 420, 287, 34, 8), black);
+            clearRect(NativeLfLocalRect(viewIndex, 434, 215, 6, 80), black);
+            clearRect(NativeLfLocalRect(viewIndex, 420, 287, 34, 8), black);
             break;
         case 3:
-            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 397, 247, 80, 6), black);
-            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 397, 233, 8, 34), black);
+            clearRect(NativeLfLocalRect(viewIndex, 397, 247, 80, 6), black);
+            clearRect(NativeLfLocalRect(viewIndex, 397, 233, 8, 34), black);
             break;
     }
 
     // The off-axis marker and binary source index distinguish every eye/view and expose accidental flips.
-    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 29, 41, 7, 12), white);
+    clearRect(NativeLfLocalRect(viewIndex, 29, 41, 7, 12), white);
     for (uint32_t bit = 0; bit < 3; ++bit) {
         if ((sourceIndex & (1u << bit)) != 0) {
-            ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 48 + static_cast<int32_t>(bit) * 10, 41, 7, 12), black);
+            clearRect(NativeLfLocalRect(viewIndex, 48 + static_cast<int32_t>(bit) * 10, 41, 7, 12), black);
         }
     }
 
     // Draw the one-pixel border last so every source footprint has an exact visible edge.
-    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 0, 0, NativeLfViewWidth, 1), white);
-    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 0, NativeLfViewHeight - 1, NativeLfViewWidth, 1), white);
-    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, 0, 0, 1, NativeLfViewHeight), white);
-    ClearNativeLfRect(commandBuffer, NativeLfLocalRect(viewIndex, NativeLfViewWidth - 1, 0, 1, NativeLfViewHeight), white);
+    clearRect(NativeLfLocalRect(viewIndex, 0, 0, NativeLfViewWidth, 1), white);
+    clearRect(NativeLfLocalRect(viewIndex, 0, NativeLfViewHeight - 1, NativeLfViewWidth, 1), white);
+    clearRect(NativeLfLocalRect(viewIndex, 0, 0, 1, NativeLfViewHeight), white);
+    clearRect(NativeLfLocalRect(viewIndex, NativeLfViewWidth - 1, 0, 1, NativeLfViewHeight), white);
 }
 
 XrFovf NativeLfSubviewFov() {
@@ -1387,7 +1397,7 @@ void Swapchain::Present(VkQueue queue, VkSemaphore drawComplete) {
 struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     VulkanGraphicsPlugin(const std::shared_ptr<Options>& options, std::shared_ptr<IPlatformPlugin> /*unused*/)
         : m_clearColor(options->GetBackgroundClearColor()), m_nativeLfDiagnostic(options->NativeLfDiagnostic),
-          m_nativeLfAtlasFormat(options->NativeLfAtlasFormat), m_colorSwapchainFormat(options->ColorSwapchainFormat) {
+          m_nativeLfAlpha(options->NativeLfAlpha), m_nativeLfAtlasFormat(options->NativeLfAtlasFormat), m_colorSwapchainFormat(options->ColorSwapchainFormat) {
         m_graphicsBinding.type = GetGraphicsBindingType();
         const char* patterns = std::getenv("NATIVE_LF_XR_PATTERNS");
 #ifdef XR_USE_PLATFORM_ANDROID
@@ -1673,7 +1683,9 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
             };
             if (!EqualsIgnoreCase(m_nativeLfAtlasFormat, "auto")) {
                 const VkFormat required = EqualsIgnoreCase(m_nativeLfAtlasFormat, "rgba") ? VK_FORMAT_R8G8B8A8_UNORM
-                                                                                          : VK_FORMAT_B8G8R8A8_UNORM;
+                    : EqualsIgnoreCase(m_nativeLfAtlasFormat, "bgra") ? VK_FORMAT_B8G8R8A8_UNORM
+                    : EqualsIgnoreCase(m_nativeLfAtlasFormat, "rgba-srgb") ? VK_FORMAT_R8G8B8A8_SRGB
+                    : VK_FORMAT_B8G8R8A8_SRGB;
                 if (!advertised(required)) {
                     THROW(Fmt("Native LF atlas selection failed: requested=%s format=%lld is not advertised by the runtime",
                               m_nativeLfAtlasFormat.c_str(), static_cast<long long>(required)));
@@ -1681,16 +1693,18 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
                 return required;
             }
 #if defined(__ANDROID__)
-            constexpr VkFormat preferred[] = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM};
+            constexpr VkFormat preferred[] = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM,
+                                               VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB};
 #else
-            constexpr VkFormat preferred[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM};
+            constexpr VkFormat preferred[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM,
+                                               VK_FORMAT_B8G8R8A8_SRGB, VK_FORMAT_R8G8B8A8_SRGB};
 #endif
             for (VkFormat format : preferred) {
                 if (advertised(format)) {
                     return format;
                 }
             }
-            THROW("Native LF atlas selection failed: runtime advertises no eligible BGRA/RGBA UNORM format");
+            THROW("Native LF atlas selection failed: runtime advertises no eligible BGRA/RGBA atlas format");
         }
 
         if (EqualsIgnoreCase(m_colorSwapchainFormat, "rgba")) {
@@ -1739,7 +1753,7 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     }
 
     void RenderView(const XrCompositionLayerProjectionView& layerView, const XrSwapchainImageBaseHeader* swapchainImage,
-                    int64_t /*swapchainFormat*/, const std::vector<Cube>& cubes) override {
+                    int64_t swapchainFormat, const std::vector<Cube>& cubes) override {
         CHECK(layerView.subImage.imageArrayIndex == 0);  // Texture arrays not supported.
 
         auto swapchainContext = m_swapchainImageContextMap[swapchainImage];
@@ -1803,8 +1817,35 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
             const XrFovf fov = NativeLfSubviewFov();
             constexpr std::array<float, 4> SubviewOffsets = {-0.03f, -0.01f, 0.01f, 0.03f};
             for (uint32_t viewIndex = 0; viewIndex < NativeLfViewOrigins.size(); ++viewIndex) {
+                if (m_nativeLfAlpha != "baseline") {
+                    // Four alpha bands and a hidden-magenta edge exercise black composition and interpolation.
+                    const auto base = NativeLfViewColors.at(swapchainContext->diagnosticEyeIndex * 4 + viewIndex);
+                    for (uint32_t band = 0; band < 4; ++band) {
+                        const float alpha = std::array<float, 4>{0.0f, 0.25f, 0.5f, 1.0f}[band];
+                        std::array<float, 4> color{0.25f + base[0] * 0.5f, 0.25f + base[1] * 0.5f,
+                                                   0.25f + base[2] * 0.5f, alpha};
+                        if (band == 0) { color = {1.0f, 0.0f, 1.0f, alpha}; }
+                        for (uint32_t channel = 0; channel < 3; ++channel) {
+                            float linear = color[channel] <= 0.04045f ? color[channel] / 12.92f
+                                : std::pow((color[channel] + 0.055f) / 1.055f, 2.4f);
+                            if (m_nativeLfAlpha == "premultiplied") {
+                                linear *= alpha;
+                            }
+                            const bool srgb = swapchainFormat == VK_FORMAT_R8G8B8A8_SRGB ||
+                                              swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB;
+                            color[channel] = srgb ? linear : (linear <= 0.0031308f ? 12.92f * linear
+                                : 1.055f * std::pow(linear, 1.0f / 2.4f) - 0.055f);
+                        }
+                        const uint32_t begin = band * NativeLfViewWidth / 4;
+                        const uint32_t end = (band + 1) * NativeLfViewWidth / 4;
+                        ClearNativeLfRect(m_cmdBuffer.buf, NativeLfLocalRect(viewIndex, begin, 0, end - begin,
+                                                                                 NativeLfViewHeight), color);
+                    }
+                    continue;
+                }
                 if (m_nativeLfPatterns) {
-                    ClearNativeLfView(m_cmdBuffer.buf, swapchainContext->diagnosticEyeIndex, viewIndex);
+                    ClearNativeLfView(m_cmdBuffer.buf, swapchainContext->diagnosticEyeIndex, viewIndex,
+                                      swapchainFormat == VK_FORMAT_R8G8B8A8_SRGB || swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB);
                 } else {
                     ClearNativeLfRect(m_cmdBuffer.buf,
                                       NativeLfLocalRect(viewIndex, 0, 0, NativeLfViewWidth, NativeLfViewHeight),
@@ -1825,7 +1866,8 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
                 XrPosef_Multiply(&subviewPose, &layerView.pose, &subviewFromEye);
                 renderScene(subviewPose, fov);
                 if (m_nativeLfPatterns) {
-                    RecordNativeLfPattern(m_cmdBuffer.buf, swapchainContext->diagnosticEyeIndex, viewIndex);
+                    RecordNativeLfPattern(m_cmdBuffer.buf, swapchainContext->diagnosticEyeIndex, viewIndex,
+                                          swapchainFormat == VK_FORMAT_R8G8B8A8_SRGB || swapchainFormat == VK_FORMAT_B8G8R8A8_SRGB);
                 }
             }
         } else {
@@ -1871,6 +1913,7 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
     VertexBuffer<Geometry::Vertex> m_drawBuffer{};
     std::array<float, 4> m_clearColor;
     bool m_nativeLfDiagnostic{false};
+    std::string m_nativeLfAlpha;
     std::string m_nativeLfAtlasFormat;
     std::string m_colorSwapchainFormat;
     bool m_nativeLfPatterns{true};
