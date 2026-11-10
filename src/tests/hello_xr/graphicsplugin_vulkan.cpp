@@ -45,6 +45,10 @@ constexpr std::array<std::array<float, 4>, 8> NativeLfViewColors = {
     std::array<float, 4>{1.0f, 0.0f, 1.0f, 1.0f}, std::array<float, 4>{0.0f, 1.0f, 1.0f, 1.0f},
     std::array<float, 4>{1.0f, 0.5f, 0.0f, 1.0f}, std::array<float, 4>{0.5f, 0.0f, 1.0f, 1.0f}};
 
+float NativeLfDecodeSrgb(float value) {
+    return value <= 0.04045f ? value / 12.92f : std::pow((value + 0.055f) / 1.055f, 2.4f);
+}
+
 void ClearNativeLfRect(VkCommandBuffer commandBuffer, VkRect2D rect, const std::array<float, 4>& color, bool encodedSrgb = false) {
     VkClearAttachment attachment{};
     attachment.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -53,8 +57,7 @@ void ClearNativeLfRect(VkCommandBuffer commandBuffer, VkRect2D rect, const std::
     if (encodedSrgb) {
         for (uint32_t i = 0; i < 3; ++i) {
             const float value = color[i];
-            attachment.clearValue.color.float32[i] = value <= 0.04045f ? value / 12.92f
-                : std::pow((value + 0.055f) / 1.055f, 2.4f);
+            attachment.clearValue.color.float32[i] = NativeLfDecodeSrgb(value);
         }
     }
     const VkClearRect clearRect{rect, 0, 1};
@@ -1826,8 +1829,7 @@ struct VulkanGraphicsPlugin : public IGraphicsPlugin {
                                                    0.25f + base[2] * 0.5f, alpha};
                         if (band == 0) { color = {1.0f, 0.0f, 1.0f, alpha}; }
                         for (uint32_t channel = 0; channel < 3; ++channel) {
-                            float linear = color[channel] <= 0.04045f ? color[channel] / 12.92f
-                                : std::pow((color[channel] + 0.055f) / 1.055f, 2.4f);
+                            float linear = NativeLfDecodeSrgb(color[channel]);
                             if (m_nativeLfAlpha == "premultiplied") {
                                 linear *= alpha;
                             }

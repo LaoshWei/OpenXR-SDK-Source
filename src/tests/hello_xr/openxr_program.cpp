@@ -27,6 +27,18 @@ const int RIGHT = 1;
 const int COUNT = 2;
 }  // namespace Side
 
+#ifdef XR_USE_GRAPHICS_API_VULKAN
+const char* NativeLfFormatName(int64_t format) {
+    switch (format) {
+        case VK_FORMAT_R8G8B8A8_UNORM: return "VK_FORMAT_R8G8B8A8_UNORM";
+        case VK_FORMAT_B8G8R8A8_UNORM: return "VK_FORMAT_B8G8R8A8_UNORM";
+        case VK_FORMAT_R8G8B8A8_SRGB: return "VK_FORMAT_R8G8B8A8_SRGB";
+        case VK_FORMAT_B8G8R8A8_SRGB: return "VK_FORMAT_B8G8R8A8_SRGB";
+        default: return "UNKNOWN";
+    }
+}
+#endif
+
 inline std::string GetXrVersionString(XrVersion ver) {
     return Fmt("%d.%d.%d", XR_VERSION_MAJOR(ver), XR_VERSION_MINOR(ver), XR_VERSION_PATCH(ver));
 }
@@ -631,9 +643,8 @@ struct OpenXrProgram : IOpenXrProgram {
 #ifdef XR_USE_GRAPHICS_API_VULKAN
             if (m_options->NativeLfDiagnostic) {
                 Log::Write(Log::Level::Info,
-                           Fmt("Native LF atlas selected: format=VK_FORMAT_%s_%s output=VK_FORMAT_B8G8R8A8_UNORM",
-                               (m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_UNORM || m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_SRGB) ? "R8G8B8A8" : "B8G8R8A8",
-                               (m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_SRGB || m_colorSwapchainFormat == VK_FORMAT_B8G8R8A8_SRGB) ? "SRGB" : "UNORM"));
+                           Fmt("Native LF atlas selected: format=%s output=VK_FORMAT_B8G8R8A8_UNORM",
+                               NativeLfFormatName(m_colorSwapchainFormat)));
             }
 #endif
 
@@ -727,9 +738,8 @@ struct OpenXrProgram : IOpenXrProgram {
             if (m_options->NativeLfDiagnostic && m_options->NativeLfTest != "mixed-srgb") {
                 Log::Write(Log::Level::Info,
                            Fmt("Native LF diagnostic contract: views=2 extent=1920x1080 "
-                           "format=VK_FORMAT_%s_%s array_size=1 image_array_index=0 sample_count=1",
-                           (m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_UNORM || m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_SRGB) ? "R8G8B8A8" : "B8G8R8A8",
-                           (m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_SRGB || m_colorSwapchainFormat == VK_FORMAT_B8G8R8A8_SRGB) ? "SRGB" : "UNORM"));
+                               "format=%s array_size=1 image_array_index=0 sample_count=1",
+                               NativeLfFormatName(m_colorSwapchainFormat)));
             }
 #endif
         }
@@ -942,9 +952,6 @@ struct OpenXrProgram : IOpenXrProgram {
             std::vector<XrCompositionLayerProjectionView> projectionLayerViews;
             const bool diagnostic = m_options->NativeLfDiagnostic;
             const std::string& test = m_options->NativeLfTest;
-            if (diagnostic && m_nativeLfFrameCount == 0) {
-                Log::Write(Log::Level::Info, Fmt("Native LF alpha mode: %s", m_options->NativeLfAlpha.c_str()));
-            }
             bool clearRequested = false;
 #ifdef XR_USE_PLATFORM_ANDROID
             if (diagnostic && test == "clear") {
@@ -972,6 +979,12 @@ struct OpenXrProgram : IOpenXrProgram {
                 if (m_options->NativeLfAlpha == "straight" || m_options->NativeLfAlpha == "unpremultiplied-only") {
                     layer.layerFlags |= XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
                 }
+            }
+            if (diagnostic && !layers.empty() && !m_nativeLfSubmissionLogged) {
+                Log::Write(Log::Level::Info, Fmt("Native LF alpha mode: %s", m_options->NativeLfAlpha.c_str()));
+                Log::Write(Log::Level::Info, Fmt("Native LF projection layerFlags=%llu",
+                                                static_cast<unsigned long long>(layer.layerFlags)));
+                m_nativeLfSubmissionLogged = true;
             }
             XrFrameEndInfo frameEndInfo{XR_TYPE_FRAME_END_INFO};
             frameEndInfo.displayTime = frameState.predictedDisplayTime;
@@ -1192,6 +1205,7 @@ struct OpenXrProgram : IOpenXrProgram {
     int64_t m_colorSwapchainFormat{-1};
     const char* m_nativeLfFrameStage{"RenderFrame"};
     uint64_t m_nativeLfFrameCount{0};
+    bool m_nativeLfSubmissionLogged{false};
     uint32_t m_nativeLfInvalidCount{0};
     bool m_nativeLfClearLogged{false};
     bool m_nativeLfRotationLogged{false};
