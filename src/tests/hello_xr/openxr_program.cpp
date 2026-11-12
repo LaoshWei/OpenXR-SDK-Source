@@ -27,6 +27,18 @@ const int RIGHT = 1;
 const int COUNT = 2;
 }  // namespace Side
 
+#ifdef XR_USE_GRAPHICS_API_VULKAN
+const char* NativeLfFormatName(int64_t format) {
+    switch (format) {
+        case VK_FORMAT_R8G8B8A8_UNORM: return "VK_FORMAT_R8G8B8A8_UNORM";
+        case VK_FORMAT_B8G8R8A8_UNORM: return "VK_FORMAT_B8G8R8A8_UNORM";
+        case VK_FORMAT_R8G8B8A8_SRGB: return "VK_FORMAT_R8G8B8A8_SRGB";
+        case VK_FORMAT_B8G8R8A8_SRGB: return "VK_FORMAT_B8G8R8A8_SRGB";
+        default: return "UNKNOWN";
+    }
+}
+#endif
+
 inline std::string GetXrVersionString(XrVersion ver) {
     return Fmt("%d.%d.%d", XR_VERSION_MAJOR(ver), XR_VERSION_MINOR(ver), XR_VERSION_PATCH(ver));
 }
@@ -631,8 +643,8 @@ struct OpenXrProgram : IOpenXrProgram {
 #ifdef XR_USE_GRAPHICS_API_VULKAN
             if (m_options->NativeLfDiagnostic) {
                 Log::Write(Log::Level::Info,
-                           Fmt("Native LF atlas selected: format=VK_FORMAT_%s_UNORM output=VK_FORMAT_B8G8R8A8_UNORM",
-                               m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_UNORM ? "R8G8B8A8" : "B8G8R8A8"));
+                           Fmt("Native LF atlas selected: format=%s output=VK_FORMAT_B8G8R8A8_UNORM",
+                               NativeLfFormatName(m_colorSwapchainFormat)));
             }
 #endif
 
@@ -676,7 +688,7 @@ struct OpenXrProgram : IOpenXrProgram {
                     swapchainCreateInfo.format = m_colorSwapchainFormat;
 #ifdef XR_USE_GRAPHICS_API_VULKAN
                     if (m_options->NativeLfDiagnostic &&
-                        (m_options->NativeLfTest == "srgb" || (m_options->NativeLfTest == "mixed-srgb" && i == 1))) {
+                        (m_options->NativeLfTest == "mixed-srgb" && i == 1)) {
                         CHECK_MSG(std::find(swapchainFormats.begin(), swapchainFormats.end(), VK_FORMAT_R8G8B8A8_SRGB) !=
                                       swapchainFormats.end(), "Diagnostic sRGB swapchain is not advertised");
                         swapchainCreateInfo.format = VK_FORMAT_R8G8B8A8_SRGB;
@@ -723,12 +735,11 @@ struct OpenXrProgram : IOpenXrProgram {
             }
 
 #ifdef XR_USE_GRAPHICS_API_VULKAN
-            if (m_options->NativeLfDiagnostic && m_options->NativeLfTest != "srgb" &&
-                m_options->NativeLfTest != "mixed-srgb") {
+            if (m_options->NativeLfDiagnostic && m_options->NativeLfTest != "mixed-srgb") {
                 Log::Write(Log::Level::Info,
                            Fmt("Native LF diagnostic contract: views=2 extent=1920x1080 "
-                           "format=VK_FORMAT_%s_UNORM array_size=1 image_array_index=0 sample_count=1",
-                           m_colorSwapchainFormat == VK_FORMAT_R8G8B8A8_UNORM ? "R8G8B8A8" : "B8G8R8A8"));
+                               "format=%s array_size=1 image_array_index=0 sample_count=1",
+                               NativeLfFormatName(m_colorSwapchainFormat)));
             }
 #endif
         }
@@ -961,6 +972,20 @@ struct OpenXrProgram : IOpenXrProgram {
                 }
             }
 
+            if (diagnostic) {
+                if (m_options->NativeLfAlpha == "straight" || m_options->NativeLfAlpha == "premultiplied") {
+                    layer.layerFlags |= XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                }
+                if (m_options->NativeLfAlpha == "straight" || m_options->NativeLfAlpha == "unpremultiplied-only") {
+                    layer.layerFlags |= XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+                }
+            }
+            if (diagnostic && !layers.empty() && !m_nativeLfSubmissionLogged) {
+                Log::Write(Log::Level::Info, Fmt("Native LF alpha mode: %s", m_options->NativeLfAlpha.c_str()));
+                Log::Write(Log::Level::Info, Fmt("Native LF projection layerFlags=%llu",
+                                                static_cast<unsigned long long>(layer.layerFlags)));
+                m_nativeLfSubmissionLogged = true;
+            }
             XrFrameEndInfo frameEndInfo{XR_TYPE_FRAME_END_INFO};
             frameEndInfo.displayTime = frameState.predictedDisplayTime;
             frameEndInfo.environmentBlendMode = m_options->Parsed.EnvironmentBlendMode;
@@ -1000,7 +1025,7 @@ struct OpenXrProgram : IOpenXrProgram {
                 ++m_nativeLfInvalidCount;
                 return;
             }
-            if (diagnostic && !layers.empty() && (test == "srgb" || test == "mixed-srgb")) {
+            if (diagnostic && !layers.empty() && test == "mixed-srgb") {
                 const XrResult rejected = xrEndFrame(m_session, &frameEndInfo);
                 Log::Write(Log::Level::Info, Fmt("Native LF invalid submission: case=%s result=%d", test.c_str(), rejected));
                 CHECK_MSG(rejected == XR_ERROR_LAYER_INVALID, "Unsupported atlas format was not synchronously rejected");
@@ -1180,6 +1205,7 @@ struct OpenXrProgram : IOpenXrProgram {
     int64_t m_colorSwapchainFormat{-1};
     const char* m_nativeLfFrameStage{"RenderFrame"};
     uint64_t m_nativeLfFrameCount{0};
+    bool m_nativeLfSubmissionLogged{false};
     uint32_t m_nativeLfInvalidCount{0};
     bool m_nativeLfClearLogged{false};
     bool m_nativeLfRotationLogged{false};

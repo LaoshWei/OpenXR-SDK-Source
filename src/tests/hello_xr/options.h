@@ -63,6 +63,7 @@ struct Options {
 
     std::string NativeLfAtlasFormat{"auto"};
     std::string NativeLfTest{"normal"};
+    std::string NativeLfAlpha{"baseline"};
     std::string ColorSwapchainFormat{"auto"};
 
     std::string FormFactor{"Hmd"};
@@ -90,14 +91,21 @@ struct Options {
         if (!EqualsIgnoreCase(ColorSwapchainFormat, "auto") && !EqualsIgnoreCase(ColorSwapchainFormat, "rgba")) {
             throw std::invalid_argument("Color swapchain format must be auto or rgba");
         }
+        if (NativeLfDiagnostic && NativeLfAlpha != "baseline" && NativeLfAlpha != "opaque" &&
+            NativeLfAlpha != "unpremultiplied-only" && NativeLfAlpha != "premultiplied" && NativeLfAlpha != "straight") {
+            throw std::invalid_argument("Unknown Native LF alpha mode");
+        }
         Parsed.FormFactor = GetXrFormFactor(FormFactor);
         Parsed.ViewConfigType = GetXrViewConfigurationType(ViewConfiguration);
         Parsed.EnvironmentBlendMode = GetXrEnvironmentBlendMode(EnvironmentBlendMode);
 
+        if (NativeLfDiagnostic && NativeLfTest == "srgb") { NativeLfAtlasFormat = "rgba-srgb"; }
         if (NativeLfDiagnostic && !EqualsIgnoreCase(NativeLfAtlasFormat, "auto") &&
             !EqualsIgnoreCase(NativeLfAtlasFormat, "bgra") &&
-            !EqualsIgnoreCase(NativeLfAtlasFormat, "rgba")) {
-            throw std::invalid_argument("Native LF atlas format must be auto, bgra or rgba");
+            !EqualsIgnoreCase(NativeLfAtlasFormat, "rgba") &&
+            !EqualsIgnoreCase(NativeLfAtlasFormat, "rgba-srgb") &&
+            !EqualsIgnoreCase(NativeLfAtlasFormat, "bgra-srgb")) {
+            throw std::invalid_argument("Native LF atlas format must be auto, bgra, rgba, bgra-srgb or rgba-srgb");
         }
         if (NativeLfDiagnostic && !EqualsIgnoreCase(GraphicsPlugin, "Vulkan") &&
             !EqualsIgnoreCase(GraphicsPlugin, "Vulkan2")) {
